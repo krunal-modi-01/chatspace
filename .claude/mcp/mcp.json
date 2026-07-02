@@ -32,44 +32,6 @@
       "args": ["-y", "@modelcontextprotocol/server-postgres", "${DATABASE_URL_READONLY}"]
     },
 
-    "issue-tracker": {
-      "_tier": "recommended",
-      "_why": "Read/write tickets so product-manager & business-analyst work from the real backlog. This entry is Atlassian/Jira; swap args for Linear/monday as needed.",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-atlassian"],
-      "env": { "JIRA_API_TOKEN": "${JIRA_API_TOKEN}", "JIRA_BASE_URL": "${JIRA_BASE_URL}" }
-    },
-
-    "knowledge-base": {
-      "_tier": "recommended",
-      "_why": "Confluence/Notion for specs & runbooks so documentation-writer reads/writes the org KB. This entry is Confluence.",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-confluence"],
-      "env": { "CONFLUENCE_API_TOKEN": "${CONFLUENCE_API_TOKEN}", "CONFLUENCE_BASE_URL": "${CONFLUENCE_BASE_URL}" }
-    },
-
-    "monitoring": {
-      "_tier": "recommended",
-      "_why": "Sentry/Datadog error & trace access for bug-investigator and performance-engineer during incidents.",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-sentry"],
-      "env": { "SENTRY_AUTH_TOKEN": "${SENTRY_AUTH_TOKEN}", "SENTRY_ORG": "${SENTRY_ORG}" }
-    },
-
-    "browser": {
-      "_tier": "recommended",
-      "_why": "Playwright-driven browser for qa-engineer (E2E), frontend-engineer (visual checks), accessibility-auditor (axe scans).",
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest"]
-    },
-
-    "openapi": {
-      "_tier": "recommended-if-api",
-      "_why": "Serve/validate the OpenAPI spec so api-reviewer and backend-engineer stay contract-first.",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-openapi", "${OPENAPI_SPEC_PATH}"]
-    },
-
     "security-scanner": {
       "_tier": "recommended",
       "_why": "Semgrep MCP for on-demand SAST queries by security-reviewer (complements the vuln-scan CI gate).",
@@ -82,29 +44,6 @@
       "_why": "Container/image inspection for devops-engineer & infrastructure-engineer. Grants control of the Docker daemon — restrict.",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-docker"]
-    },
-
-    "kubernetes": {
-      "_tier": "optional",
-      "_why": "Cluster introspection (read-only context recommended) for devops-engineer. NEVER point at prod with write creds from a dev session.",
-      "command": "npx",
-      "args": ["-y", "mcp-server-kubernetes"],
-      "env": { "KUBECONFIG": "${KUBECONFIG_READONLY}" }
-    },
-
-    "cloud": {
-      "_tier": "optional",
-      "_why": "AWS/Azure/GCP resource introspection for infrastructure-engineer. Use a read-only IAM role scoped to non-prod by default. This entry is AWS.",
-      "command": "uvx",
-      "args": ["awslabs.core-mcp-server"],
-      "env": { "AWS_PROFILE": "${AWS_READONLY_PROFILE}", "AWS_REGION": "${AWS_REGION}" }
-    },
-
-    "terraform": {
-      "_tier": "optional",
-      "_why": "Terraform registry/module/plan context for infrastructure-engineer. Plan-only; apply stays in CI with human approval.",
-      "command": "uvx",
-      "args": ["terraform-mcp-server"]
     }
   }
 }
