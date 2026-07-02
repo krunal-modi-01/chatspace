@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "_comment": "Per-developer overrides. Copy to settings.local.json (gitignored). Use for personal permission grants, local command overrides, and local-only MCP servers. NEVER put shared policy or secrets here — shared policy goes in settings.json; secrets go in env vars.",
+
+  "env": {
+    "CLAUDE_TEST_CMD": "pnpm test",
+    "CLAUDE_LINT_CMD": "pnpm lint",
+    "CLAUDE_FORMAT_CMD": "pnpm format",
+    "CLAUDE_TYPECHECK_CMD": "pnpm typecheck"
+  },
+
+  "permissions": {
+    "allow": [
+      "Bash(pnpm:*)",
+      "Bash(docker compose up:*)"
+    ]
+  }
+}
