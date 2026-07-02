@@ -1,0 +1,20 @@
+# Architecture Decision Records — chatspace
+
+This directory holds the Architecture Decision Records (ADRs) for chatspace. Each ADR captures one significant, non-obvious decision: the context that forced it, the options weighed, the choice, and its consequences and reversibility. ADRs follow `templates/adr.md`.
+
+All ADRs below are **Proposed** — the human owns the 🔒 Architecture gate and must sign them off before implementation begins. ADR-0008 (deployment target) and ADR-0007 (media storage) record human-confirmed *directions*; the specific provider choices remain with the human. Numbering is sequential with no gaps.
+
+The Technical Specification that these ADRs support: [`docs/spec/chatspace-v1-technical-spec.md`](../../docs/spec/chatspace-v1-technical-spec.md). Traces to the functional spec: [`docs/spec/chatspace-v1-functional-spec.md`](../../docs/spec/chatspace-v1-functional-spec.md).
+
+| Number | Title | Status | Date |
+|--------|-------|--------|------|
+| [ADR-0001](0001-modular-monolith-fastapi.md) | Modular monolith FastAPI serving REST + WebSocket | Proposed | 2026-07-02 |
+| [ADR-0002](0002-dm-data-model.md) | Direct-message data model (recipient_id on messages, no channel row) | Proposed | 2026-07-02 |
+| [ADR-0003](0003-cursor-pagination.md) | Cursor (keyset) pagination for message history | Proposed | 2026-07-02 |
+| [ADR-0004](0004-realtime-delivery-fanout.md) | Real-time delivery — Redis pub/sub, persist-then-publish, at-least-once + client dedup | Proposed | 2026-07-02 |
+| [ADR-0005](0005-message-id-scheme.md) | Time-sortable message identifiers (UUIDv7) | Proposed | 2026-07-02 |
+| [ADR-0006](0006-revocable-sessions.md) | Revocable sessions — server-side session store + Redis revocation check | Proposed | 2026-07-02 |
+| [ADR-0007](0007-media-object-storage.md) | Media storage — S3-compatible abstraction, validate-through-app, separate-origin signed URLs | Proposed | 2026-07-02 |
+| [ADR-0008](0008-deployment-target.md) | Deployment target — managed PaaS (recommend Render) | Proposed | 2026-07-02 |
+| [ADR-0009](0009-system-admin-bootstrap.md) | System Admin bootstrap — env-seeded at startup | Proposed | 2026-07-02 |
+| [ADR-0010](0010-transactional-email.md) | Transactional email — provider-agnostic SMTP abstraction, fail-loud, no queue | Proposed | 2026-07-02 |
