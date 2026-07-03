@@ -16,10 +16,13 @@ export const meta = {
 // }
 // This script prepares a change for the 🔒 human review + deploy gates. It NEVER merges or deploys.
 
-const specLink = args?.specLink ?? 'docs/spec/chatspace-v1-technical-spec.md'
-const contractDoc = args?.contractDoc ?? 'docs/spec/chatspace-v1-api-contract.md'
-const dbDesignDoc = args?.dbDesignDoc ?? 'docs/spec/chatspace-v1-database-design.md'
-const tasks = args?.tasks ?? []
+// The harness may deliver `args` as a JSON-encoded string; normalize to an object.
+const A = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
+
+const specLink = A?.specLink ?? 'docs/spec/chatspace-v1-technical-spec.md'
+const contractDoc = A?.contractDoc ?? 'docs/spec/chatspace-v1-api-contract.md'
+const dbDesignDoc = A?.dbDesignDoc ?? 'docs/spec/chatspace-v1-database-design.md'
+const tasks = A?.tasks ?? []
 
 // Map task kind → canonical roster agent (see CLAUDE.md AGENT ROSTER).
 const ENGINEER = {
