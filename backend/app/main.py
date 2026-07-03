@@ -11,6 +11,8 @@ belong (`app/api`, `app/models`, `app/schemas`, `app/services`, `app/db`,
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,8 +23,22 @@ from app.core.correlation import HEADER_NAME
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import correlation_id_middleware
+from app.db.session import dispose_engine
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Dispose the DB engine's pooled connections on shutdown.
+
+    The engine itself is created lazily (see `app.db.session.get_engine`)
+    on first use — typically the first `/v1/readyz` call or DB-backed
+    request — so there is nothing to open here, only to close cleanly.
+    """
+
+    yield
+    await dispose_engine()
 
 
 def create_app() -> FastAPI:
@@ -42,6 +58,7 @@ def create_app() -> FastAPI:
         version="1.0.0",
         docs_url="/v1/docs",
         openapi_url="/v1/openapi.json",
+        lifespan=_lifespan,
     )
 
     # Only send credentialed CORS responses to a concrete origin allowlist.

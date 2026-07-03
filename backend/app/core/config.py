@@ -58,6 +58,42 @@ class Settings(BaseSettings):
         description="Postgres connection string (asyncpg driver), e.g. "
         "postgresql+asyncpg://user:pass@host:5432/chatspace",
     )
+    db_pool_size: int = Field(
+        default=10,
+        ge=1,
+        description=(
+            "Per-instance asyncpg pool size (SQLAlchemy `pool_size`). Config-driven per "
+            "the technical spec's connection-pooling-per-instance design (no PgBouncer "
+            "at 1,000-user scale)."
+        ),
+    )
+    db_max_overflow: int = Field(
+        default=5,
+        ge=0,
+        description="Extra connections allowed above `db_pool_size` under burst load.",
+    )
+    db_pool_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description="Max seconds to wait for a connection from the pool before failing fast.",
+    )
+    db_statement_timeout_ms: int = Field(
+        default=5000,
+        gt=0,
+        description=(
+            "Bounded Postgres `statement_timeout` (ms) applied to every connection, so a "
+            "slow/hung query fails fast instead of piling up requests (technical spec: "
+            "'PostgreSQL down/slow' risk mitigation)."
+        ),
+    )
+    db_connect_timeout_seconds: float = Field(
+        default=3.0,
+        gt=0,
+        description=(
+            "Max seconds to wait when establishing a new asyncpg connection (e.g. "
+            "Postgres unreachable) before failing fast — bounds the readyz probe."
+        ),
+    )
 
     # --- Redis (pub/sub fan-out, presence, rate limiting, session cache) ----
     redis_url: SecretStr = Field(
