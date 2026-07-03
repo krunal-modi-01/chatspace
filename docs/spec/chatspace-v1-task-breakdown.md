@@ -1,0 +1,472 @@
+# chatspace v1 — Task Breakdown
+
+> Ordered, dependency-aware decomposition of the [v1 technical spec](./chatspace-v1-technical-spec.md) into independently-buildable, PR-sized tasks. Honors the ten binding ADRs (`architecture/adr/0001`–`0010`) and the 1,000-user single-Postgres/single-Redis constraint from `CLAUDE.md`. No ADR is re-decided here.
+
+## Summary
+
+This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks across six milestones: **M0 Foundation** (skeleton, config, DB/Redis wiring, the initial schema migration, shared id/pagination utilities), **M1 Auth & Onboarding** (security primitives, revocable sessions, email, non-skippable admin bootstrap, invites, registration, login/reset), **M2 Core Domain** (profile, channels, membership + succession, admin deactivate, messages, DMs), **M3 Realtime** (WS connection manager, Redis persist-then-publish fan-out, presence, typing), **M4 Cross-cutting** (rate limiting, media pipeline + association), **M5 Frontend** (auth/channel/messaging/WS/presence/media UI + WCAG AA), and **M6 Ship** (docker-compose, CI, observability, Render deploy, load test + restore drill GA gate). The ordering honors persist-then-publish (T24 after message persistence), auth-before-join WS semantics, and the 1,000-user single-Postgres/single-Redis constraint. Backend and frontend tracks run largely in parallel against the frozen API contract.
+
+## Milestone overview
+
+| Milestone | Tasks | Owning agents | Ships |
+|-----------|-------|---------------|-------|
+| **M0 — Foundation** | T01–T08 | backend, database, infrastructure, frontend | Buildable skeleton, migrated schema, shared utils |
+| **M1 — Auth & Onboarding** | T09–T16 | backend | Phase-0 prereqs + full auth/invite/reset loop |
+| **M2 — Core Domain** | T17–T22 | backend | Profile, channels, membership, messages, DMs (REST) |
+| **M3 — Realtime** | T23–T26 | backend | WS delivery, cross-instance fan-out, presence, typing |
+| **M4 — Cross-cutting** | T27–T29 | backend | Rate limiting, media pipeline |
+| **M5 — Frontend** | T30–T36 | frontend, accessibility | Full SPA + WCAG 2.1 AA |
+| **M6 — Ship** | T37–T41 | infrastructure, devops, performance | Docker, CI, observability, deploy, GA validation |
+
+Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff check` / `npm run lint`; **TYPE** = `mypy app` / `npm run typecheck`; **TEST** = `pytest` / `npm run test`; **SEC** = secret-scan hook passes + security-reviewer sign-off (invoked wherever auth/PII/secrets/tokens are touched).
+
+---
+
+## M0 — Foundation
+
+### T01 — Backend app skeleton + settings + health
+- **Phase / owner:** Foundation / `backend-engineer` (+ `infrastructure-engineer` for `uv`)
+- **Depends on:** —
+- **Scope (in):** FastAPI app entrypoint (`app/main.py`), the `api/ws/models/schemas/services/db/core` package layout from `CLAUDE.md` REPOSITORY STRUCTURE, `pydantic-settings` config loading all secrets from env (DB URL, Redis URL, JWT key, SMTP, S3, bootstrap admin), `/v1/healthz` liveness + `/v1/readyz` readiness endpoints, `uv` project (`pyproject.toml`), `/v1` base-path router mount.
+- **Scope (out):** No business routes, no DB models, no auth.
+- **Acceptance criteria:**
+  - [ ] `uv sync` installs; app boots via `docker-compose up` skeleton or `uvicorn`.
+  - [ ] Settings fail fast with a clear error when a required env var is missing; no secret has a hardcoded default.
+  - [ ] `GET /v1/healthz` returns 200; `GET /v1/readyz` reflects DB+Redis reachability (stubbed until T03/T05).
+  - [ ] LINT, TYPE, TEST pass; SEC (no secrets committed).
+- **Refs:** TSD §2–§3; `CLAUDE.md` REPOSITORY STRUCTURE, boundaries.secrets_location.
+
+### T02 — Structured logging + correlation id + RFC 7807 error handler
+- **Phase / owner:** Foundation / `backend-engineer`
+- **Depends on:** T01
+- **Scope (in):** JSON structured logging; per-request correlation-id middleware (generated or propagated), attached to every log line and every response body; global exception handler emitting `application/problem+json` with `type/title/status/detail/instance/correlation_id` and the `errors[]` list on 400/422; a redaction guard that keeps message content, tokens, secrets, and PII out of logs.
+- **Scope (out):** Metrics/Sentry (T39); per-endpoint problem slugs (added by owning tasks).
+- **Acceptance criteria:**
+  - [ ] Every response carries `correlation_id`; same id appears on the request's log lines.
+  - [ ] Errors serialize as problem+json with the exact shape in the API contract "Conventions → Errors".
+  - [ ] Unit test asserts a log emitted while logging a message body/JWT contains no raw content/token (F68/R24).
+  - [ ] LINT, TYPE, TEST, SEC pass.
+- **Refs:** API contract Conventions (Errors); TSD §8 Logging, §9; FS F68/F70.
+
+### T03 — Async DB layer + Alembic scaffolding
+- **Phase / owner:** Foundation / `backend-engineer` (+ `database-engineer` review)
+- **Depends on:** T01
+- **Scope (in):** Async SQLAlchemy engine over `asyncpg` with a per-instance pool and bounded statement timeout; `AsyncSession` FastAPI dependency; Alembic initialized and wired to settings; `readyz` DB probe. **No tables yet.**
+- **Scope (out):** Schema DDL (T04); PgBouncer (explicitly deferred per TSD §4).
+- **Acceptance criteria:**
+  - [ ] `alembic upgrade head` runs against an empty DB (no-op baseline).
+  - [ ] Session dependency yields/closes cleanly; pool size + statement timeout are config-driven.
+  - [ ] `readyz` turns unhealthy when Postgres is unreachable (fast error, no hang) — supports TSD §7 "Postgres down".
+  - [ ] LINT, TYPE, TEST pass.
+- **Refs:** TSD §4 (asyncpg pool), §7; `CLAUDE.md` commands.migrate_*.
+
+### T04 — Initial schema migration (all tables, enums, indexes, constraints)
+- **Phase / owner:** Foundation / `database-engineer`
+- **Depends on:** T03
+- **Scope (in):** One Alembic migration authoring the exact DDL in the DB design doc: enums (`channel_member_role`, `invite_status`, `attachment_kind`); tables `users, channels, channel_members, messages, attachments, invites, password_reset_tokens, sessions` in FK order; all functional/partial indexes; XOR + no-self-DM CHECK, content/name/size CHECKs; a total, tested downgrade.
+- **Scope (out):** Seed data (bootstrap is T12); any table not in the design; SQLAlchemy ORM model classes may be authored here or in owning tasks (author them here to unblock).
+- **Acceptance criteria:**
+  - [ ] `alembic upgrade head` then `downgrade base` round-trips cleanly on a scratch DB (verified in CI, T38).
+  - [ ] All indexes/constraints from DB design "Indexing strategy" and "Integrity & invariants" present, including `ix_messages_dm_history` on `least/greatest(sender_id,recipient_id)`.
+  - [ ] `id` columns have **no** DB default (app-generated UUIDv7 per T06); `created_at` defaults `now()`.
+  - [ ] No Postgres extension required; token columns are `*_token_hash` only.
+  - [ ] Migration is additive-only and never edits a prior file; `schema-change-guard` checklist satisfied; LINT/TYPE/TEST pass.
+- **Refs:** DB design (full); TSD §4; ADR-0002/0003/0005/0006/0007; `CLAUDE.md` do_not_touch (alembic/versions).
+
+### T05 — Redis client wiring
+- **Phase / owner:** Foundation / `backend-engineer`
+- **Depends on:** T01
+- **Scope (in):** Async Redis client from settings; connection lifecycle + `readyz` probe; namespaced key helpers/prefixes for the four Redis roles (pub/sub `chan:{id}`/`dm:{a}:{b}`, presence, rate-limit buckets, session-revocation cache); documented fail-mode wrappers (callers decide fail-open vs fail-closed).
+- **Scope (out):** Pub/sub logic (T24), presence (T25), rate limiter (T27), revocation cache population (T10) — this is the shared client only.
+- **Acceptance criteria:**
+  - [ ] Client connects; `readyz` degrades (not crashes) when Redis is down — matches TSD §7 "Redis down".
+  - [ ] Key-builder unit tests produce canonical DM topic `dm:{least}:{greatest}`.
+  - [ ] LINT, TYPE, TEST pass.
+- **Refs:** TSD §2 (Redis roles), §7; `CLAUDE.md` ARCHITECTURE NOTES.
+
+### T06 — UUIDv7 id generation utility
+- **Phase / owner:** Foundation / `backend-engineer`
+- **Depends on:** T01
+- **Scope (in):** App-side UUIDv7 generator (vetted library, e.g. `uuid-utils`/`uuid6`) exposed as a single helper used by all id assignment; the id must be obtainable before persist so it can accompany the fan-out payload.
+- **Scope (out):** DB defaults (excluded by design).
+- **Acceptance criteria:**
+  - [ ] Generated ids are valid UUIDv7 and monotonically time-sortable within a process (property test over a batch).
+  - [ ] New dependency passes the `dependency-update` vetting checklist (recorded).
+  - [ ] LINT, TYPE, TEST pass.
+- **Refs:** ADR-0005; DB design cross-cutting decision #1.
+
+### T07 — Cursor pagination utility
+- **Phase / owner:** Foundation / `backend-engineer`
+- **Depends on:** T06
+- **Scope (in):** Opaque base64url cursor encode/decode over `(created_at, id)`; a reusable keyset-query helper (DESC, `limit` default 50 / clamp 100); `{ items, next_cursor }` envelope; `next_cursor=null` at stream end; malformed cursor → 400.
+- **Scope (out):** Offset pagination (implemented inline in T18 public browse); the actual message queries (T21/T22).
+- **Acceptance criteria:**
+  - [ ] Round-trip encode→decode is stable; clients cannot need to construct it (opaque).
+  - [ ] `limit>100` clamps to 100; invalid cursor raises the 400 problem+json.
+  - [ ] Unit tests cover end-of-stream and short-page-≠-end (soft-deleted exclusion) semantics.
+  - [ ] LINT, TYPE, TEST pass.
+- **Refs:** ADR-0003; API contract Conventions → Pagination.
+
+### T08 — Frontend app skeleton
+- **Phase / owner:** Foundation / `frontend-engineer`
+- **Depends on:** —
+- **Scope (in):** React/TS SPA (Vite), Tailwind, routing, typed REST client with `Authorization: Bearer` injection + 401→refresh handling, a store for access/refresh tokens and current user, base problem+json error surfacing, env-based API base URL.
+- **Scope (out):** Feature screens (T30–T36); WS client (T33).
+- **Acceptance criteria:**
+  - [ ] `npm run build` succeeds; app renders a shell with protected/public route split.
+  - [ ] API client attaches Bearer, parses problem+json, and shows `correlation_id` in dev error UI.
+  - [ ] Functional components only, one per file, no inline business logic (extracted to hooks/services) per `CLAUDE.md` React conventions.
+  - [ ] LINT, TYPE, TEST (frontend) pass.
+- **Refs:** `CLAUDE.md` Conventions (React); API contract Conventions (Auth).
+
+---
+
+## M1 — Auth & Onboarding
+
+### T09 — Security primitives (password hashing, policy, JWT)
+- **Phase / owner:** Auth / `backend-engineer`
+- **Depends on:** T01
+- **Scope (in):** bcrypt/argon2 hash+verify; password policy validator (min 6 + basic strength) reused by register/change/reset; JWT sign/verify with 15-min TTL carrying `sub`=user_id and `sid`=session_id; signing key from settings.
+- **Scope (out):** Session persistence/revocation (T10); endpoints.
+- **Acceptance criteria:**
+  - [ ] Hashes never reversible/logged; verify constant-time; policy rejects non-compliant with 422 detail (F23).
+  - [ ] JWT encodes/decodes `sub`+`sid`; expired token rejected; signing key never logged.
+  - [ ] LINT, TYPE, TEST, SEC (secrets, hashing) pass.
+- **Refs:** TSD §8 AuthN; FS F23; API contract Auth; `CLAUDE.md` SECURITY REQUIREMENTS.
+
+### T10 — Session store + Redis revocation cache + auth dependency
+- **Phase / owner:** Auth / `backend-engineer`
+- **Depends on:** T04, T05, T06, T09
+- **Scope (in):** `sessions` CRUD (create with hashed refresh token, 30-day sliding expiry, revoke, list-by-user); Redis revocation cache (hot path) with Postgres fallback when cold; a `require_auth` FastAPI dependency that validates the JWT and re-runs the revocation check (sid active + user active) on every protected request → near-immediate 401 on revoke/deactivate.
+- **Scope (out):** Login/logout endpoints (T15); WS revalidation (T23).
+- **Acceptance criteria:**
+  - [ ] Revoked/expired/logged-out `sid` fails auth within one request; Redis-down falls back to Postgres (correctness preserved, latency up) per TSD §7.
+  - [ ] Refresh tokens stored only as `refresh_token_hash`; raw never returned/logged.
+  - [ ] Tests cover: valid, revoked, expired, deactivated-user, cold-cache fallback.
+  - [ ] LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied for the auth dependency contract.
+- **Refs:** ADR-0006; DB design `sessions`, `ix_sessions_user_active`; API contract Conventions (Auth), `/v1/auth/sessions`.
+
+### T11 — EmailService (SMTP abstraction, fail-loud)
+- **Phase / owner:** Auth / `backend-engineer`
+- **Depends on:** T01
+- **Scope (in):** Provider-agnostic async SMTP sender; invite + reset templates; inline send with bounded retry; **fail-loud** (raises so callers surface 502/alert); startup check that email config is present (Phase-0 prerequisite); no token/PII in logs.
+- **Scope (out):** Invite/reset business logic (T13/T16).
+- **Acceptance criteria:**
+  - [ ] Missing email config fails the app at startup (non-skippable prerequisite).
+  - [ ] Send failure raises a typed error (no silent queue-and-forget); retry is bounded.
+  - [ ] Templates never log the raw token/link; SEC passes.
+  - [ ] LINT, TYPE, TEST pass.
+- **Refs:** ADR-0010; TSD §10 Phase 0, §7 (Email down); FS F1/F15, §9 hard deps.
+
+### T12 — System Admin bootstrap (env-seed, non-skippable)
+- **Phase / owner:** Auth / `backend-engineer`
+- **Depends on:** T04, T06, T09
+- **Scope (in):** Startup routine that, when zero users exist, creates exactly one active `is_system_admin` user from env-seeded credentials (hashed); idempotent on restart; app refuses to serve if bootstrap cannot complete and no admin exists.
+- **Scope (out):** Admin endpoints (T20); invites (T13).
+- **Acceptance criteria:**
+  - [ ] Fresh DB → exactly one System Admin created without any invite (F8); re-run creates no duplicate.
+  - [ ] Bootstrap credentials read only from env; never logged; SEC passes.
+  - [ ] Workspace can never reach a zero-admin state at startup (F8/R46).
+  - [ ] LINT, TYPE, TEST pass.
+- **Refs:** ADR-0009; TSD §10 Phase 0; FS F8/F9.
+
+### T13 — Invite service + endpoints
+- **Phase / owner:** Auth / `backend-engineer`
+- **Depends on:** T10, T11, T12, T06
+- **Scope (in):** `POST /v1/invites` (system_admin only, single-use 7-day token, email dispatched, 409 if already registered, 502 on email-unreachable), `GET /v1/invites/{token}` (validate, return locked email, 410 on non-pending), `POST /v1/invites/{id}/resend` (rotate token, invalidate prior), `DELETE /v1/invites/{id}` (revoke); store `token_hash` only; content-free audit events for issuance/revocation.
+- **Scope (out):** Registration redemption (T14); rate limiting (T27).
+- **Acceptance criteria:**
+  - [ ] Non-admin caller → 403; already-registered email → 409; SMTP unreachable → 502 fail-loud.
+  - [ ] Raw invite token never returned in any response or log; only `token_hash` persisted.
+  - [ ] Resend invalidates the prior token (410 on old); revoke → 410; used invite → 409 on revoke.
+  - [ ] Audit event logged without the token; LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** API contract `/v1/invites*`; FS F1–F7; DB design `invites`.
+
+### T14 — Registration (invite redemption)
+- **Phase / owner:** Auth / `backend-engineer`
+- **Depends on:** T13, T09
+- **Scope (in):** `POST /v1/auth/register` — redeem a pending/unexpired invite, create active user with email locked to the invite, hash password (policy-checked), enforce case-insensitive unique username/email, mark invite `accepted`; no invite-less path.
+- **Scope (out):** Login (T15).
+- **Acceptance criteria:**
+  - [ ] Valid invite + compliant password → 201 user (no hash in body), invite → accepted (F5).
+  - [ ] Expired/used/revoked token → 410; duplicate username/email → 409; bad password → 422; missing token → rejected (F6/F7).
+  - [ ] LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** API contract `/v1/auth/register`; FS F5/F6/F7; DB design `users`.
+
+### T15 — Login / refresh / logout + session management endpoints
+- **Phase / owner:** Auth / `backend-engineer`
+- **Depends on:** T10
+- **Scope (in):** `POST /v1/auth/login` (200 with access+refresh+user; 401 uniform on bad creds; 403 on deactivated), `POST /v1/auth/refresh` (rotate/slide), `POST /v1/auth/logout` (revoke current sid, 204), `GET /v1/auth/sessions`, `DELETE /v1/auth/sessions/{id}` (own-only, 403/404).
+- **Scope (out):** Rate limiting (T27); reset (T16).
+- **Acceptance criteria:**
+  - [ ] Login issues 15-min access + 30-day refresh session; deactivated → 403 with clear title; invalid creds → 401 non-field-revealing (F11).
+  - [ ] Logout revokes only the current session; other sessions unaffected (F14); revoked refresh → 401 (F12).
+  - [ ] Session list never returns token material; cross-user session delete → 403.
+  - [ ] LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** API contract `/v1/auth/login|refresh|logout|sessions`; FS F10–F14; ADR-0006.
+
+### T16 — Password reset + password change
+- **Phase / owner:** Auth / `backend-engineer`
+- **Depends on:** T10, T11
+- **Scope (in):** `POST /v1/auth/password-reset` (uniform 202, latest-token-only, email single-use 1-hour token via T11), `POST /v1/auth/password-reset/confirm` (410 on stale/used, invalidate other sessions), `POST /v1/auth/password/change` (verify current, keep initiating session, revoke others). `token_hash` only; content-free reset-request audit event; reset send failure preserves uniform response but alerts server-side.
+- **Scope (out):** Rate limiting (T27).
+- **Acceptance criteria:**
+  - [ ] Reset response identical whether or not the email exists (F15, non-enumerating).
+  - [ ] Only the most recently issued reset token validates; earlier → 410 (F17); confirm/change invalidate other sessions (F16/F22); wrong current password → 401, password unchanged.
+  - [ ] Raw reset token never returned/logged; LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** API contract `/v1/auth/password-*`; FS F15–F17, F22; DB design `password_reset_tokens`, `ix_prt_user_active`.
+
+---
+
+## M2 — Core Domain
+
+### T17 — Profile endpoints (`/v1/me`)
+- **Phase / owner:** Core / `backend-engineer`
+- **Depends on:** T10
+- **Scope (in):** `GET /v1/me`; `PATCH /v1/me` for `first_name/last_name/avatar_url`; email/username immutable (400 on change attempt); initials-fallback data available; never return hash.
+- **Scope (out):** Avatar upload path (open question #1 — accept URL for now; revisit with T28).
+- **Acceptance criteria:**
+  - [ ] GET returns profile without password (F18); PATCH persists name/avatar; attempt to change email/username → 400 (F20).
+  - [ ] Empty name → 422; LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** API contract `/v1/me`; FS F18–F21.
+
+### T18 — Channel create / get / public browse
+- **Phase / owner:** Core / `backend-engineer`
+- **Depends on:** T10
+- **Scope (in):** `POST /v1/channels` (any active user; creator recorded as `admin` member; name 1–80 charset, case-insensitive unique → 409/422), `GET /v1/channels/{id}` (member sees; private non-member → uniform 404), `GET /v1/channels/public` (offset pagination, page size 50, excludes channels caller already belongs to).
+- **Scope (out):** Membership mutation (T19); messages (T21).
+- **Acceptance criteria:**
+  - [ ] Create → 201 with creator as admin member (F29); duplicate name → 409; invalid name → 422.
+  - [ ] Private channel invisible to non-members via uniform 404; public browse returns `{items,total,limit,offset}` excluding own memberships (F30).
+  - [ ] LINT, TYPE, TEST pass; `api-change-guard` satisfied.
+- **Refs:** API contract `/v1/channels`, `/channels/public`, `/channels/{id}`; FS F29–F31; DB design `channels`.
+
+### T19 — Membership + last-admin succession + zero-admin frozen state
+- **Phase / owner:** Core / `backend-engineer`
+- **Depends on:** T18
+- **Scope (in):** `POST /join` (public only, idempotent), `POST /leave` (sole-admin succession runs first), `GET/POST/PATCH/DELETE /members` (admin-gated add/remove/role), earliest-`joined_at` succession (F36) in a transaction, zero-admin terminal state blocks membership/role mutation (409, F37), server-side membership check reused everywhere.
+- **Scope (out):** Deactivation-triggered succession call site (T20).
+- **Acceptance criteria:**
+  - [ ] Sole admin leaving with members present → earliest-joined member promoted before removal (F36); no members → channel persists zero-admin (F37).
+  - [ ] Mutations on a zero-admin channel → 409 (F33/F37); private join by non-admin → 403; non-admin member mgmt → 403.
+  - [ ] Join/leave idempotent; concurrency test asserts succession runs at most once.
+  - [ ] LINT, TYPE, TEST pass; `api-change-guard` satisfied.
+- **Refs:** API contract `/channels/{id}/join|leave|members*`; FS F31–F37, Flows E/F; DB design `ix_channel_members_admin_succession`.
+
+### T20 — Admin deactivate / reactivate
+- **Phase / owner:** Core / `backend-engineer`
+- **Depends on:** T15, T19
+- **Scope (in):** `POST /v1/admin/users/{id}/deactivate` (system_admin only; set `is_active=false`; revoke all target sessions immediately via T10; run channel succession where target is sole admin via T19; last-active-admin guard → 409), `POST .../reactivate` (fresh session only). Content-free audit events.
+- **Scope (out):** WS mid-connection drop (delivered by T23 revalidation; this task just invalidates sessions).
+- **Acceptance criteria:**
+  - [ ] Deactivate invalidates all target sessions and runs succession for each sole-admin channel (F25/F36); last System Admin → 409 (F27).
+  - [ ] Reactivate restores login with a new session; prior sessions stay invalid (F26); prior messages/memberships intact (F28).
+  - [ ] LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** API contract `/v1/admin/users/*`; FS F25–F28, Flow D; ADR-0009.
+
+### T21 — Message send / edit / delete / history (channels)
+- **Phase / owner:** Core / `backend-engineer`
+- **Depends on:** T19, T07, T10
+- **Scope (in):** `POST /channels/{id}/messages` (required `Idempotency-Key`; membership check; app-generated UUIDv7; validate content ≤4000 non-whitespace; validate supplied `media_id`s belong to sender + unbound), `GET /channels/{id}/messages` (cursor history, soft-deleted excluded), `PATCH /messages/{id}` + `DELETE /messages/{id}` (author-only, edit rejected if deleted). Persist only (publish added in T24).
+- **Scope (out):** Fan-out/live events (T24); DMs (T22); rate limiting (T27); media bytes (T28).
+- **Acceptance criteria:**
+  - [ ] Valid send → 201 with UUIDv7 id + authoritative `created_at`; replay of same `Idempotency-Key` → 200 same row, exactly one row (F40); missing key → 400.
+  - [ ] Non-member → 403; empty/whitespace/>4000 → 422; edit by non-author → 403; edit of deleted → 409; delete → 204 soft-delete retains row (F42/F43).
+  - [ ] History chronological, soft-deleted excluded, `next_cursor` correct; serves catch-up via `cursor` (F44/F55).
+  - [ ] LINT, TYPE, TEST pass; `api-change-guard` satisfied.
+- **Refs:** API contract `/channels/{id}/messages`, `/messages/{id}`; FS F38–F45; ADR-0003/0004/0005.
+
+### T22 — DM send / history
+- **Phase / owner:** Core / `backend-engineer`
+- **Depends on:** T21, T07
+- **Scope (in):** `POST /dms/{user_id}/messages` (participant model: `recipient_id` set, `channel_id` null; required `Idempotency-Key`; recipient must be distinct + active; self-DM → 422), `GET /dms/{user_id}/messages` (cursor history keyed on canonical `least/greatest` pair). Persist only.
+- **Scope (out):** Live delivery (T24).
+- **Acceptance criteria:**
+  - [ ] DM to distinct active user → 201; self-DM → 422 (F47); inactive/nonexistent recipient → 404.
+  - [ ] History uses identical `least/greatest(sender_id,recipient_id)` expressions to hit `ix_messages_dm_history`; participant-check enforced.
+  - [ ] Idempotency semantics match channel send; LINT, TYPE, TEST pass; `api-change-guard` satisfied.
+- **Refs:** API contract `/dms/{user_id}/messages`; FS F46–F48; ADR-0002; DB design DM index.
+
+---
+
+## M3 — Realtime
+
+### T23 — WebSocket connection manager (auth-before-join, heartbeat, revalidation, close codes)
+- **Phase / owner:** Realtime / `backend-engineer`
+- **Depends on:** T10, T05
+- **Scope (in):** `/v1/ws` endpoint; authenticate token **before** any join (missing/invalid → close `4401`); `join`/`leave` frames with per-frame membership/participant re-check; ping/pong heartbeat; periodic revalidation re-running the session/user-active check and dropping with documented close codes (`4402/4403/4404/4408/4429`, `1001` on drain); per-connection subscription bookkeeping.
+- **Scope (out):** Redis fan-out payloads (T24); presence (T25); typing (T26).
+- **Acceptance criteria:**
+  - [ ] Connect without valid token → `4401` before any join; unauthorized `join` → non-fatal `error` frame, socket stays open (F52).
+  - [ ] Revoked/expired/deactivated session dropped at next heartbeat with the correct close code; missed heartbeats reaped (`4408`).
+  - [ ] Close-code catalogue matches the API contract table exactly.
+  - [ ] LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** API contract WebSocket `/v1/ws` (auth, close codes, frames); FS F51/F52; ADR-0006.
+
+### T24 — Redis pub/sub fan-out + persist-then-publish wiring
+- **Phase / owner:** Realtime / `backend-engineer`
+- **Depends on:** T23, T21, T22
+- **Scope (in):** Per-instance Redis subscriber relaying `chan:{id}`/`dm:{a}:{b}` events to local sockets; publish `message.created/edited/deleted` **after** commit in T21/T22 service paths, carrying the id for client dedup; cross-instance delivery with no session affinity; graceful behavior when Redis publish fails (event lost → recovered via catch-up).
+- **Scope (out):** Presence/typing (T25/T26); media in payload (T29).
+- **Acceptance criteria:**
+  - [ ] A message sent on instance A is received by a subscriber on instance B (F53), verified with two app instances.
+  - [ ] Event is emitted only after DB commit (persist-then-publish, F45); Redis-down leaves REST/history working, live delivery stops (TSD §7).
+  - [ ] Server→client envelope matches the API contract shape; edit/delete events carry id (F42/F43/F54).
+  - [ ] LINT, TYPE, TEST pass; `api-change-guard` satisfied.
+- **Refs:** ADR-0004; API contract WebSocket events; FS F45/F51/F53/F54.
+
+### T25 — Presence service
+- **Phase / owner:** Realtime / `backend-engineer`
+- **Depends on:** T23, T05
+- **Scope (in):** Redis ref-count per user across tabs/instances with heartbeat TTL; `presence` online/offline events; durable `last_seen` write to Postgres on last disconnect; no false-online after Redis restart.
+- **Scope (out):** Typing (T26).
+- **Acceptance criteria:**
+  - [ ] User `online` while ≥1 connection; one of many tabs closing keeps `online` (F49); last close/timeout → `offline` + durable `last_seen` (F50).
+  - [ ] Redis restart → no user falsely online; `last_seen` still available from Postgres.
+  - [ ] LINT, TYPE, TEST pass.
+- **Refs:** FS F49/F50; TSD §2/§7 presence; DB design `users.last_seen`.
+
+### T26 — Typing indicator relay
+- **Phase / owner:** Realtime / `backend-engineer`
+- **Depends on:** T23, T24
+- **Scope (in):** `typing` client frame → fan-out `typing` event to other conversation participants; server relays only (no persistence); client-side 5-s auto-expire semantics documented (no stop frame).
+- **Scope (out):** UI expiry logic (T34).
+- **Acceptance criteria:**
+  - [ ] Typing in a channel/DM relays a `typing` event to other participants only, across instances (F56).
+  - [ ] No DB write; abusive frame rate can trigger `4429` via T27 hook point.
+  - [ ] LINT, TYPE, TEST pass; `api-change-guard` satisfied.
+- **Refs:** API contract `typing` frame/event; FS F56.
+
+---
+
+## M4 — Cross-cutting
+
+### T27 — Rate limiter (token bucket)
+- **Phase / owner:** Cross-cutting / `backend-engineer`
+- **Depends on:** T05, T15, T21
+- **Scope (in):** Redis token-bucket middleware/dependency: message send 10/10s burst 20 (per user), auth endpoints 5/5min per IP+identifier (non-enumerating), media upload 20/min (per user), abusive WS frames → `4429`; `429` + `Retry-After`; **fail-closed** on abuse-sensitive endpoints when Redis is unavailable.
+- **Scope (out):** Media endpoints exist in T28 — wire the upload limit there.
+- **Acceptance criteria:**
+  - [ ] Over-limit send/auth/upload → 429 + `Retry-After`; auth keying reveals nothing about identifier existence (F64).
+  - [ ] Redis-down → abuse-sensitive endpoints fail-closed (reject), others degrade gracefully (TSD §7).
+  - [ ] LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** API contract Conventions → Rate limits; FS F62–F64; TSD §3 rate limiter.
+
+### T28 — Media upload / validate / sniff / EXIF-strip / store + presigned GET + orphan cleanup
+- **Phase / owner:** Cross-cutting / `backend-engineer` (+ `security-reviewer`)
+- **Depends on:** T10, T04
+- **Scope (in):** `POST /v1/media` (multipart; per-kind size caps → 413; allowlist + SVG exclusion + sniff mismatch → 415; EXIF-strip-or-reject for images; filename sanitize; boto3 put to S3-compatible bucket; store metadata + `storage_key`), `GET /v1/media/{id}/url` (5-min presigned GET authorized against **current** membership/participation → 403), orphan-sweep job for unbound attachments (F62).
+- **Scope (out):** Binding to messages (T29).
+- **Acceptance criteria:**
+  - [ ] Oversize → 413; disallowed/SVG/sniff-mismatch/EXIF-fail → 415; nothing stored on rejection (F58/F61).
+  - [ ] Presigned URL issued only to a current member/participant (F59); removed member loses access within TTL; URL never logged.
+  - [ ] Orphan sweep removes unbound rows past TTL via `ix_attachments_orphans` and purges object bytes; SEC (content-type/PII/secrets) passes.
+  - [ ] LINT, TYPE, TEST pass; `api-change-guard` + upload-rate-limit (T27) wired.
+- **Refs:** API contract `/v1/media*`; FS F57–F62, Flow H; ADR-0007; DB design `attachments`.
+
+### T29 — Media association on message-create + `media[]` hydration
+- **Phase / owner:** Cross-cutting / `backend-engineer`
+- **Depends on:** T28, T21, T24
+- **Scope (in):** On channel/DM send, bind supplied `media_ids` (verify uploader==sender + still unbound), set `message_id`; batch-hydrate `media[]` on history reads (`WHERE message_id = ANY(:ids)`, no N+1) and on WS event payloads.
+- **Scope (out):** Frontend rendering (T35).
+- **Acceptance criteria:**
+  - [ ] Unknown/other-user/already-bound `media_id` → 422; bound attachment appears in message `media[]` and in the WS `message.created` payload.
+  - [ ] History media hydration is a single batch fetch per page (no N+1); LINT, TYPE, TEST pass; `api-change-guard` satisfied.
+- **Refs:** API contract message-create + WS envelope `media`; DB design `ix_attachments_message`, "Message media hydration".
+
+---
+
+## M5 — Frontend (builds against the frozen API contract; parallel with M2–M4)
+
+### T30 — Auth flows UI
+- **Owner:** `frontend-engineer` · **Depends on:** T08, T14, T15, T16
+- **Scope (in):** Login, invite-redemption registration (email locked/pre-filled from `GET /invites/{token}`), password-reset request+confirm, password change, logout, "manage devices" session list/revoke; problem+json surfacing; refresh-on-401.
+- **Scope (out):** Channels/messaging.
+- **Acceptance:** All auth screens work end-to-end against backend; deactivated/invalid-cred/expired-invite states render correct messaging; no token stored in a way that logs it; LINT/TYPE/TEST(frontend) + SEC pass.
+- **Refs:** API contract auth/invite/reset; FS Flows A/B/C.
+
+### T31 — Channels + membership UI
+- **Owner:** `frontend-engineer` · **Depends on:** T08, T18, T19
+- **Scope:** Channel create, public browse+join (offset paging), channel view, member list + admin membership/role management, leave with succession messaging, zero-admin frozen affordance. (Out: messages.)
+- **Acceptance:** Create/browse/join/leave and admin member mgmt work; private-channel 404 handled; 409 zero-admin surfaced; LINT/TYPE/TEST pass.
+- **Refs:** API contract channels/members; FS F29–F37.
+
+### T32 — Messaging UI
+- **Owner:** `frontend-engineer` · **Depends on:** T08, T21
+- **Scope:** Message list with cursor history/infinite scroll, optimistic send with client-generated `Idempotency-Key`, author edit/delete, other-user identity + initials badge (F21/F24). (Out: live WS — T33.)
+- **Acceptance:** Send/edit/delete/history render; soft-deleted hidden; optimistic send reconciles by id; LINT/TYPE/TEST pass.
+- **Refs:** API contract messages; FS F38–F44.
+
+### T33 — WebSocket client (connect / join / dedup / reconnect catch-up)
+- **Owner:** `frontend-engineer` · **Depends on:** T08, T23, T24
+- **Scope:** WS connect with access token, `join` authorized conversations, render live `message.created/edited/deleted`, **client dedup by message id**, reconnecting banner + catch-up via history-since-last-id, close-code handling (refresh+reconnect on 4402). (Out: presence/typing UI.)
+- **Acceptance:** Live events render without refresh; duplicates deduped (F54); reconnect fetches missed messages and merges (F55); LINT/TYPE/TEST pass.
+- **Refs:** API contract WebSocket; FS F51–F55, Flows J/K.
+
+### T34 — Presence + typing UI
+- **Owner:** `frontend-engineer` · **Depends on:** T33, T25, T26
+- **Scope:** Online/offline + last_seen rendering; typing indicator with 5-s auto-expire; heartbeat pings.
+- **Acceptance:** Presence reflects ref-counted state; typing auto-clears 5 s after last frame (F56); LINT/TYPE/TEST pass.
+- **Refs:** FS F49/F50/F56.
+
+### T35 — Media UI
+- **Owner:** `frontend-engineer` · **Depends on:** T31, T28
+- **Scope:** Upload (progress, size/type errors), attach `media_id` on send, inline render for decodable images/video, download affordance with filename/size otherwise (no transcoding), fetch via presigned URL.
+- **Acceptance:** Upload+attach+render/download work; 413/415/429 surfaced; presigned URL used at fetch time; LINT/TYPE/TEST pass.
+- **Refs:** API contract media; FS F57–F62.
+
+### T36 — Accessibility pass (WCAG 2.1 AA)
+- **Owner:** `accessibility-auditor` (+ `frontend-engineer`) · **Depends on:** T30–T35
+- **Scope:** ARIA live regions for incoming messages/typing/edits/deletes, keyboard nav, focus management on live updates, contrast, alt text, initials-badge semantics.
+- **Acceptance:** Automated a11y checks pass; keyboard-only flows for auth/channel/message verified; live-region announcements verified; LINT/TYPE/TEST pass.
+- **Refs:** FS §9 (WCAG 2.1 AA); TSD §3 React SPA.
+
+---
+
+## M6 — Ship
+
+### T37 — Dockerfiles + docker-compose (local full stack)
+- **Owner:** `infrastructure-engineer` · **Depends on:** T01, T05
+- **Scope:** Backend/frontend images; `docker-compose.yml` with app, Postgres, Redis, MinIO (S3-compatible), and a local SMTP catcher; `docker-compose up --build` boots the stack and runs migrations. (Out: prod deploy — T40.)
+- **Acceptance:** `docker-compose up --build` yields a working local env with all dependencies; migrations applied on boot; no secrets baked into images; SEC passes.
+- **Refs:** `CLAUDE.md` commands.run; ADR-0007 (MinIO local); ADR-0010.
+
+### T38 — CI pipeline
+- **Owner:** `devops-engineer` · **Depends on:** T04, T37
+- **Scope:** Pipeline running install, LINT, TYPE, TEST (backend+frontend), secret-scan hook, and migration `upgrade head`→`downgrade base` round-trip on a scratch DB; PR gate = 1 approval, squash to `main`.
+- **Acceptance:** CI runs all `CLAUDE.md` command gates and blocks merge on failure; migration round-trip verified; secret-scan enforced (not disable-able).
+- **Refs:** `CLAUDE.md` DEFINITION OF DONE, conventions.pr_target; DB design reversibility.
+
+### T39 — Observability
+- **Owner:** `devops-engineer` (+ `backend-engineer`) · **Depends on:** T02, T24
+- **Scope:** Sentry-class error/uptime monitor; key metrics (active WS conns, send throughput/error rate, delivery lag SLI, 429 counts, presence gauge, media/email success, DB pool saturation, Redis availability); content-free audit events; symptom-based alerts.
+- **Acceptance:** Delivery-lag SLI emitted; audit events (invite/deactivation/reset) recorded without payloads (F69); alerts defined for the TSD §9 list; no PII/tokens in any signal (SEC).
+- **Refs:** TSD §9; FS F68/F69.
+
+### T40 — Render deployment + CORS/TLS/secrets/object-store/SMTP wiring
+- **Owner:** `infrastructure-engineer` (+ `devops-engineer`) · **Depends on:** T37
+- **Scope:** Render services (app ×1–2 behind LB, managed Postgres w/ daily backups, managed Redis), object-store + SMTP env wiring, TLS at LB, CORS allowlist (no wildcard in prod), all secrets via env; Phase-0 startup prerequisites enforced.
+- **Acceptance:** Deploy runs ≥2 stateless app instances; TLS enforced; CORS blocks unlisted origins (F66/F67); app fails loud at startup if email/admin bootstrap missing; daily backups configured; SEC passes. **🔒 human sign-off** (irreversible/prod config).
+- **Refs:** ADR-0008; TSD §10; FS F66/F67; `CLAUDE.md` SECURITY REQUIREMENTS.
+
+### T41 — Load test + backup/restore drill (GA gate)
+- **Owner:** `performance-engineer` (+ `devops-engineer`) · **Depends on:** T29, T33, T38, T39, T40
+- **Scope:** Full REST+WS+fan-out load test at ~1,000 concurrent users across 2 instances validating p95 <500 ms delivery / <300 ms reads; mandatory Postgres restore drill; confirm history `limit` max (open question #4).
+- **Acceptance:** Latency SLOs met at target load (F65); restore drill completes within RTO target and is documented; findings recorded (promote to outbox only if loss observed, ADR-0004). **🔒 GA sign-off gate.**
+- **Refs:** TSD §6/§7/§12; FS F65, §9 accepted risks; ADR-0003/0004.
+
+---
+
+## Parallelizable tracks
+
+- **Wave M0** — T01→T02→T03→T04 is a serial spine; **T05, T06, T07 run in parallel** once T01 lands; **T08 (frontend skeleton) is fully independent** and can start on day 1.
+- **Wave M1** — T09, T11 parallel after T01; T12 after T04/T06/T09; then T13→T14 serial. **T15 and T16 run in parallel** once T10 lands.
+- **Wave M2** — After T10: **T17, T18 parallel**; T19 after T18; T20 after T15+T19; **T21 then T22** (T22 reuses T21's send/idempotency helper). T17 can run alongside the channel track.
+- **Wave M3** — T23 first; then **T24, T25 parallel**; T26 after T24.
+- **Wave M4** — **T27 and T28 are independent** (different subsystems) and parallel; T29 joins them after both.
+- **Frontend (M5)** runs as a **continuous parallel track** against the frozen API contract: T30 tracks M1, T31/T32 track M2, T33/T34 track M3, T35 tracks M4; T36 is a finishing sweep.
+- **Ship (M6)** — T37 can be built early (right after M0); T38 follows T37; **T39 and T40 parallel**; T41 is the final serial GA gate depending on the whole system.
+
+**Critical path:** T01→T03→T04→T10→(T18→T19)→T21→T23→T24→T29→T41
+
+**Human 🔒 gates:** architecture sign-off already covers the design (TSD footer); additional 🔒 gates land at **T40** (prod/irreversible deploy config) and **T41** (GA go/no-go after load + restore drill). Every task touching auth/PII/secrets (T09, T10, T11, T12, T13, T14, T15, T16, T20, T27, T28) routes through the security-reviewer/secret-scan gate.
