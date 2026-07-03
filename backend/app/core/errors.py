@@ -27,6 +27,7 @@ re-declaring error shapes.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
@@ -35,7 +36,9 @@ from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.correlation import get_correlation_id
+from app.core.correlation import HEADER_NAME, get_correlation_id
+
+logger = logging.getLogger(__name__)
 
 PROBLEM_CONTENT_TYPE = "application/problem+json"
 PROBLEM_BASE_URL = "https://chatspace.example/problems"
@@ -117,7 +120,13 @@ def _problem_response(
         title=title,
         errors=errors,
     )
-    return JSONResponse(status_code=status_code, content=body, media_type=PROBLEM_CONTENT_TYPE)
+    response = JSONResponse(status_code=status_code, content=body, media_type=PROBLEM_CONTENT_TYPE)
+    # The unhandled-exception (500) handler runs inside Starlette's
+    # ServerErrorMiddleware, which sits outside the correlation-id HTTP
+    # middleware that normally echoes this header — so set it here to keep
+    # the header present on every error, where tracing matters most.
+    response.headers[HEADER_NAME] = body["correlation_id"]
+    return response
 
 
 async def http_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -150,6 +159,14 @@ async def validation_exception_handler(request: Request, exc: Exception) -> JSON
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     # Never leak internals (stack traces, exception messages) into the response;
     # the correlation id is the join key back to the (separately logged) detail.
+    # Only the exception *type* and request path are logged — never
+    # `str(exc)` or a formatted traceback, since an exception message can
+    # incidentally embed request data (content, tokens, PII) that the
+    # redaction guard cannot reliably scrub out of free-form text (F68/R24).
+    logger.error(
+        "unhandled exception",
+        extra={"exception_type": type(exc).__name__, "path": request.url.path},
+    )
     return _problem_response(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="An unexpected error occurred. Reference the correlation id for support.",
