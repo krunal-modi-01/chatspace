@@ -41,8 +41,10 @@ def configured_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 @pytest.fixture
 def client(configured_env: None) -> Iterator[TestClient]:
     from app.core.config import get_settings
+    from app.db.redis import get_redis_client
 
     get_settings.cache_clear()
+    get_redis_client.cache_clear()
 
     from app.main import create_app
 
@@ -51,6 +53,7 @@ def client(configured_env: None) -> Iterator[TestClient]:
         yield test_client
 
     get_settings.cache_clear()
+    get_redis_client.cache_clear()
 
 
 @pytest.fixture(scope="session")
@@ -64,6 +67,24 @@ def postgres_available() -> bool:
     """
 
     host, port = "localhost", 5432
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.fixture(scope="session")
+def redis_available() -> bool:
+    """Probe once per test session whether the local test Redis is up.
+
+    Mirrors `postgres_available`: Redis-backed tests that need a real
+    connection are *skipped* (not failed) when it isn't reachable, so the
+    suite stays green on a bare CI runner while still exercising the real
+    client wherever a local Redis is available.
+    """
+
+    host, port = "localhost", 6379
     try:
         with socket.create_connection((host, port), timeout=1):
             return True

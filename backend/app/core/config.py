@@ -100,6 +100,15 @@ class Settings(BaseSettings):
         ...,
         description="Redis connection string, e.g. redis://host:6379/0",
     )
+    redis_connect_timeout_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        description=(
+            "Max seconds the readyz probe waits for a Redis `PING` before "
+            "reporting unavailable — bounds the probe so an unreachable/"
+            "wedged Redis fails fast (degrade, not hang or crash; see T05)."
+        ),
+    )
 
     # --- JWT / session signing (ADR-0006) -----------------------------------
     jwt_signing_key: SecretStr = Field(

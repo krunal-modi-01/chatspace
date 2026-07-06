@@ -19,13 +19,15 @@ def test_healthz_is_plain_json_not_problem_json(client: TestClient) -> None:
     assert "application/problem+json" not in response.headers["content-type"]
 
 
-def test_readyz_returns_200_when_database_reachable(
-    client: TestClient, postgres_available: bool
+def test_readyz_returns_200_when_database_and_redis_reachable(
+    client: TestClient, postgres_available: bool, redis_available: bool
 ) -> None:
-    """Database probe is real (T03); redis remains stubbed until T05."""
+    """Both the database (T03) and Redis (T05) probes are real."""
 
     if not postgres_available:
         pytest.skip("local Postgres not reachable on localhost:5432")
+    if not redis_available:
+        pytest.skip("local Redis not reachable on localhost:6379")
 
     response = client.get("/v1/readyz")
 
@@ -37,7 +39,45 @@ def test_readyz_returns_200_when_database_reachable(
     db_check = next(c for c in body["checks"] if c["name"] == "database")
     redis_check = next(c for c in body["checks"] if c["name"] == "redis")
     assert db_check["status"] == "ok"
-    assert redis_check["status"] == "stubbed"
+    assert redis_check["status"] == "ok"
+
+
+def test_readyz_returns_503_when_redis_unreachable(
+    configured_env: None, monkeypatch: pytest.MonkeyPatch, postgres_available: bool
+) -> None:
+    """Redis down degrades readyz to 503 — it must never crash the process (T05)."""
+
+    if not postgres_available:
+        pytest.skip("local Postgres not reachable on localhost:5432")
+
+    import socket
+
+    from app.core.config import get_settings
+    from app.db.redis import get_redis_client
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        closed_port = sock.getsockname()[1]
+
+    monkeypatch.setenv("REDIS_URL", f"redis://127.0.0.1:{closed_port}/0")
+    monkeypatch.setenv("REDIS_CONNECT_TIMEOUT_SECONDS", "1")
+    get_settings.cache_clear()
+    get_redis_client.cache_clear()
+
+    from app.main import create_app
+
+    app = create_app()
+    with TestClient(app) as test_client:
+        response = test_client.get("/v1/readyz")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "unavailable"
+    redis_check = next(c for c in body["checks"] if c["name"] == "redis")
+    assert redis_check["status"] == "unavailable"
+
+    get_settings.cache_clear()
+    get_redis_client.cache_clear()
 
 
 def test_readyz_returns_503_when_a_dependency_is_unavailable(

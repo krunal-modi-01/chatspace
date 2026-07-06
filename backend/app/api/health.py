@@ -31,16 +31,14 @@ async def healthz() -> dict[str, str]:
 async def readyz() -> JSONResponse:
     """Aggregate downstream dependency readiness.
 
-    The Postgres check is real (T03: a bounded `SELECT 1` against the
-    async engine). Redis remains stubbed until T05 wires the Redis
-    client — until then it reports `stubbed` rather than asserting
-    readiness it cannot verify.
+    Both checks are real: Postgres (T03, a bounded `SELECT 1` against the
+    async engine) and Redis (T05, a bounded `PING` against the shared
+    async client). Either dependency being unreachable degrades this
+    endpoint's response — it never crashes the process.
 
     Returns HTTP 200 when ready and 503 when any dependency is
     `UNAVAILABLE`, so a load balancer / orchestrator can gate traffic on
-    the status code (not just the body). Once T05 flips the Redis stub to
-    a real probe, an unhealthy Redis will surface as 503 without any
-    further change here.
+    the status code (not just the body).
     """
 
     checks = [await check_database(), await check_redis()]

@@ -23,6 +23,7 @@ from app.core.correlation import HEADER_NAME
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import correlation_id_middleware
+from app.db.redis import dispose_redis_client
 from app.db.session import dispose_engine
 
 logger = logging.getLogger(__name__)
@@ -30,15 +31,17 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Dispose the DB engine's pooled connections on shutdown.
+    """Dispose the DB engine's and Redis client's pooled connections on shutdown.
 
-    The engine itself is created lazily (see `app.db.session.get_engine`)
-    on first use — typically the first `/v1/readyz` call or DB-backed
-    request — so there is nothing to open here, only to close cleanly.
+    Both are created lazily (see `app.db.session.get_engine` and
+    `app.db.redis.get_redis_client`) on first use — typically the first
+    `/v1/readyz` call or a DB/Redis-backed request — so there is nothing
+    to open here, only to close cleanly.
     """
 
     yield
     await dispose_engine()
+    await dispose_redis_client()
 
 
 def create_app() -> FastAPI:
