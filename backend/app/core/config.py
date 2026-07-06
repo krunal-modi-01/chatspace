@@ -16,7 +16,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import Field, SecretStr, ValidationInfo, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -120,11 +120,50 @@ class Settings(BaseSettings):
 
     # --- SMTP / transactional email (ADR-0010) ------------------------------
     smtp_host: str = Field(..., description="SMTP server host.")
-    smtp_port: int = Field(..., description="SMTP server port.")
+    smtp_port: int = Field(..., gt=0, le=65535, description="SMTP server port.")
     smtp_username: str = Field(..., description="SMTP auth username.")
     smtp_password: SecretStr = Field(..., description="SMTP auth password. Never logged.")
     smtp_from_address: str = Field(..., description="From: address for invite/reset emails.")
-    smtp_use_tls: bool = Field(default=True)
+    smtp_use_tls: bool = Field(
+        default=False,
+        description=(
+            "Implicit TLS on connect (typically port 465). Mutually exclusive with "
+            "`smtp_start_tls` — `aiosmtplib` supports only one TLS negotiation mode per "
+            "send. Default is False because the common transactional relays "
+            "(Postmark/SES/Mailgun on 587, local MailHog on 1025) use STARTTLS, not "
+            "implicit TLS."
+        ),
+    )
+    smtp_start_tls: bool = Field(
+        default=True,
+        description=(
+            "Require STARTTLS upgrade after connecting in plaintext (typically port "
+            "587). Mutually exclusive with `smtp_use_tls`. This is `True` (required, "
+            "not opportunistic) by default so an on-path attacker cannot silently strip "
+            "the upgrade; set to `False` only when `smtp_use_tls=True` (implicit TLS) "
+            "or when pointed at a trusted local relay that does not support STARTTLS."
+        ),
+    )
+    smtp_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Bounded inline retry count for a single email send (ADR-0010: no queue, "
+            "inline send with bounded retry, fail-loud after this many attempts)."
+        ),
+    )
+    smtp_retry_backoff_seconds: float = Field(
+        default=0.5,
+        ge=0,
+        description="Base backoff between bounded inline retry attempts (grows linearly).",
+    )
+    smtp_send_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        description=(
+            "Max seconds to wait for a single SMTP send attempt before treating it as failed."
+        ),
+    )
 
     # --- S3-compatible object storage (ADR-0007) ----------------------------
     s3_endpoint_url: str = Field(
@@ -170,6 +209,25 @@ class Settings(BaseSettings):
         if info.data.get("app_env") == "production" and "*" in value:
             raise ValueError("CORS wildcard '*' origin is not allowed in production")
         return value
+
+    @model_validator(mode="after")
+    def _reject_conflicting_tls_modes(self) -> Settings:
+        """Forbid requesting both TLS negotiation modes at once.
+
+        `aiosmtplib.send` accepts `use_tls` (implicit TLS, e.g. port 465) and
+        `start_tls` (STARTTLS upgrade, e.g. port 587) as mutually exclusive
+        connection modes -- passing both `True` is a misconfiguration, not a
+        valid "extra secure" combination, so it must fail fast at startup
+        rather than surface as a confusing runtime SMTP error.
+        """
+
+        if self.smtp_use_tls and self.smtp_start_tls:
+            raise ValueError(
+                "smtp_use_tls and smtp_start_tls are mutually exclusive: set "
+                "smtp_use_tls=True for implicit TLS (port 465) OR "
+                "smtp_start_tls=True for STARTTLS (port 587), not both."
+            )
+        return self
 
 
 @lru_cache
