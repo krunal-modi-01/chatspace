@@ -2,7 +2,7 @@
 name: security-reviewer
 description: Invoke for any change touching authentication, authorization, session handling, secrets, cryptography, money movement, or PII/PHI; for threat modeling a new feature or service; for triaging vulnerability scanner findings; and as the MANDATORY security gate before merge/deploy of sensitive surfaces.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: sonnet
 ---
 # Security Reviewer Agent
 ## Mission

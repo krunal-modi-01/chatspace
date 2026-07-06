@@ -56,3 +56,49 @@ def test_error_correlation_id_matches_response_header(client: TestClient) -> Non
     body = response.json()
     assert body["correlation_id"] == "abc-123"
     assert response.headers["X-Correlation-Id"] == "abc-123"
+
+
+def test_password_policy_error_handler_is_registered(configured_env: None) -> None:
+    """`PasswordPolicyError` (T09/F23) is wired to a problem+json 422 handler
+    even before any password-setting endpoint (register/change/reset)
+    exists to raise it."""
+
+    from app.core.password_policy import PasswordPolicyError
+    from app.main import create_app
+
+    app = create_app()
+    assert PasswordPolicyError in app.exception_handlers
+
+
+def test_password_policy_error_renders_as_422_problem_json(
+    configured_env: None,
+) -> None:
+    """Wire a throwaway route that raises `PasswordPolicyError` and assert
+    the response matches the frozen 422 problem+json shape with a
+    field-level `errors[]` array (F23)."""
+
+    from app.core.password_policy import enforce_password_policy
+    from app.main import create_app
+
+    app = create_app()
+
+    @app.get("/v1/__test-password-policy")
+    def _raise_policy_error() -> None:
+        enforce_password_policy("a1", field_name="new_password")
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/v1/__test-password-policy")
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+    body = response.json()
+    assert body["status"] == 422
+    assert body["instance"] == "/v1/__test-password-policy"
+    assert "correlation_id" in body and body["correlation_id"]
+    assert body["errors"]
+    assert all(e["field"] == "new_password" for e in body["errors"])
+    # The rejected candidate password itself must never appear in the body,
+    # only the policy-violation description.
+    assert all("a1" != e.get("detail") for e in body["errors"])
+    assert body["detail"] == "Password fails policy."

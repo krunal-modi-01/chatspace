@@ -25,6 +25,7 @@ from app.core.logging import configure_logging
 from app.core.middleware import correlation_id_middleware
 from app.db.redis import dispose_redis_client
 from app.db.session import dispose_engine
+from app.services.email import verify_email_config
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,13 @@ def create_app() -> FastAPI:
 
     settings = get_settings()
     configure_logging(settings.log_level)
+
+    # Phase-0 non-skippable prerequisite (ADR-0010, technical spec §10):
+    # transactional email must be usable before the app is allowed to
+    # serve traffic, since invites/resets would otherwise silently fail.
+    # `Settings` already fails process startup if a `smtp_*` var is
+    # missing entirely; this catches present-but-malformed values too.
+    verify_email_config(settings)
 
     app = FastAPI(
         title="chatspace API",

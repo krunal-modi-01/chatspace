@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.correlation import HEADER_NAME, get_correlation_id
+from app.core.password_policy import PasswordPolicyError
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,24 @@ async def validation_exception_handler(request: Request, exc: Exception) -> JSON
     )
 
 
+async def password_policy_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Turn a `PasswordPolicyError` (F23) into the frozen 422 problem+json shape.
+
+    Reused by every password-setting endpoint (register, password change,
+    password-reset confirm) via a single `PasswordPolicyError` raised from
+    `app.core.password_policy.enforce_password_policy` — never the raw
+    candidate password, which this handler never sees or logs.
+    """
+
+    assert isinstance(exc, PasswordPolicyError)
+    return _problem_response(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="Password fails policy.",
+        instance=request.url.path,
+        errors=exc.errors,
+    )
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     # Never leak internals (stack traces, exception messages) into the response;
     # the correlation id is the join key back to the (separately logged) detail.
@@ -188,4 +207,5 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(PasswordPolicyError, password_policy_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)

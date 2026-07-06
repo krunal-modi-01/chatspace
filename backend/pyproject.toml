@@ -15,6 +15,12 @@ dependencies = [
     "uuid6>=2024.7.10",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
+    # passlib 1.7.4's bcrypt backend probes `bcrypt.__about__.__version__` to
+    # detect the installed bcrypt version; that attribute was removed in
+    # bcrypt 4.1, which breaks `CryptContext(schemes=["bcrypt"])` entirely
+    # (AttributeError at hash/verify time, not just a warning). Pin below
+    # that break until passlib ships a compatible release.
+    "bcrypt<4.1.0",
     "boto3>=1.35.0",
     "aiosmtplib>=3.0.2",
 ]
