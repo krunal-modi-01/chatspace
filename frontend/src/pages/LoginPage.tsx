@@ -1,0 +1,72 @@
+import type { JSX } from 'react';
+import { Link } from 'react-router-dom';
+import { ErrorBanner } from '../components/ErrorBanner';
+import { useLoginForm } from '../hooks/useLoginForm';
+
+/** Minimal login screen wiring the typed API client + auth store. Full
+ * auth UX (invite registration, password reset, device management) is
+ * built out in T30 — this only proves the skeleton's public/protected
+ * split and 401/refresh-capable client work end to end. */
+export function LoginPage(): JSX.Element {
+  const { email, setEmail, password, setPassword, error, isSubmitting, submit } = useLoginForm();
+
+  return (
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <div className="w-full max-w-sm space-y-6">
+        <h1 className="text-center text-2xl font-semibold text-gray-900">Sign in to chatspace</h1>
+
+        {error !== null && <ErrorBanner error={error} />}
+
+        <form className="space-y-4" onSubmit={submit} noValidate>
+          <div>
+            <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+              Email
+            </label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+              Password
+            </label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {isSubmitting ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+
+        <p className="text-center text-sm text-gray-500">
+          Need an account? Use your invite link to{' '}
+          <Link to="/register" className="font-medium text-indigo-600 hover:text-indigo-500">
+            register
+          </Link>
+          .
+        </p>
+      </div>
+    </div>
+  );
+}
