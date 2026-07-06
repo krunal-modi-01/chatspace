@@ -4,8 +4,12 @@ The Postgres probe (T03) runs a real `SELECT 1` against the async
 SQLAlchemy engine, bounded by an explicit timeout so an unreachable or
 wedged Postgres fails the probe fast rather than hanging the request
 (technical spec §Risks: "the app returns fast errors rather than
-hanging"). The Redis probe remains stubbed until T05 wires the Redis
-client.
+hanging"). The Redis probe (T05) runs a real `PING` against the shared
+async client the same way: Redis being down must *degrade* the readyz
+response (503, `unavailable`) rather than crash the process — per the
+"Redis down/slow" failure mode in the technical spec, live delivery,
+presence, and rate limiting degrade while REST/history keep working from
+Postgres.
 """
 
 from __future__ import annotations
@@ -15,10 +19,12 @@ import logging
 from dataclasses import dataclass
 from enum import StrEnum
 
+from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
+from app.db.redis import get_redis_client
 from app.db.session import get_engine
 
 logger = logging.getLogger(__name__)
@@ -91,14 +97,48 @@ async def check_database() -> ReadinessCheck:
 
 
 async def check_redis() -> ReadinessCheck:
-    """Stub Redis readiness probe.
+    """Probe Redis reachability with a bounded `PING`.
 
-    TODO(T05): replace with a real `PING` against the Redis client once
-    the Redis integration module exists.
+    Mirrors `check_database`'s "fail fast, don't hang" posture: an outer
+    `asyncio.wait_for` bounds the probe so an unreachable or wedged Redis
+    reports `unavailable` promptly rather than hanging the `/v1/readyz`
+    request. Redis being unavailable degrades this readiness check only —
+    it must never crash the process (technical spec §Risks "Redis
+    down/slow": live delivery/presence/rate-limiting degrade, REST/history
+    keep working from Postgres).
+
+    Never includes the connection string or driver-level exception text
+    in the returned detail, for the same reason as `check_database`: this
+    response is unauthenticated and must not leak infrastructure
+    internals.
     """
+
+    settings = get_settings()
+    timeout = settings.redis_connect_timeout_seconds
+
+    try:
+        client = get_redis_client()
+        await asyncio.wait_for(client.ping(), timeout=timeout)
+    except TimeoutError:
+        logger.warning("readyz redis probe timed out", extra={"timeout_seconds": timeout})
+        return ReadinessCheck(
+            name="redis",
+            status=ReadinessStatus.UNAVAILABLE,
+            detail="Redis did not respond within the probe timeout.",
+        )
+    except (RedisError, OSError):
+        # `OSError` covers transport-level failures redis-py does not
+        # always wrap (e.g. a bare `ConnectionRefusedError`/DNS failure),
+        # matching the equivalent branch in `check_database`.
+        logger.warning("readyz redis probe failed", exc_info=False)
+        return ReadinessCheck(
+            name="redis",
+            status=ReadinessStatus.UNAVAILABLE,
+            detail="Redis is unreachable.",
+        )
 
     return ReadinessCheck(
         name="redis",
-        status=ReadinessStatus.STUBBED,
-        detail="Redis connectivity probe not yet wired (see T05).",
+        status=ReadinessStatus.OK,
+        detail="Redis reachable.",
     )
