@@ -60,7 +60,12 @@ def test_decode_access_token_rejects_expired_token(settings: Settings) -> None:
 
 def test_decode_access_token_rejects_bad_signature(settings: Settings) -> None:
     token, _ = create_access_token(user_id="user-1", session_id="session-1", settings=settings)
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    # Tamper the FIRST char of the signature segment: its bits are always
+    # significant, unlike the last base64url char (low 2 bits are padding for a
+    # 32-byte HS256 signature, so flipping it can decode to identical bytes).
+    header, payload, signature = token.split(".")
+    tampered_signature = ("B" if signature[0] != "B" else "C") + signature[1:]
+    tampered = f"{header}.{payload}.{tampered_signature}"
 
     with pytest.raises(InvalidTokenError):
         decode_access_token(tampered, settings=settings)
