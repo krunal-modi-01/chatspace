@@ -2,7 +2,7 @@
 name: code-reviewer
 description: Use immediately after any code is written or before opening/merging a PR. Reviews a diff for correctness bugs, security issues, and reuse/simplification opportunities. Returns findings ranked by severity — it does not merge or approve on its own.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: sonnet
 ---
 
 # Code Reviewer Agent
