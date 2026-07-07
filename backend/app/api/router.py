@@ -9,17 +9,18 @@ T10 adds the `/v1/auth/sessions` list/revoke routes (session store +
 `require_auth`, ADR-0006). T15 adds `/v1/auth/login`, `/refresh`, and
 `/logout` (`app.api.auth`). T16 adds `/v1/auth/password-reset`,
 `/v1/auth/password-reset/confirm`, and `/v1/auth/password/change`
-(`app.api.password`).
+(`app.api.password`). T17 adds `/v1/me` (own profile — `GET`/`PATCH`).
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import auth, health, password, sessions
+from app.api import auth, health, me, password, sessions
 
 api_router = APIRouter(prefix="/v1")
 api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(sessions.router)
 api_router.include_router(password.router)
+api_router.include_router(me.router)
