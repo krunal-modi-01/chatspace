@@ -39,6 +39,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.correlation import HEADER_NAME, get_correlation_id
 from app.core.pagination import PaginationError
 from app.core.password_policy import PasswordPolicyError
+from app.services.auth import MustChangePasswordError
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +91,21 @@ def build_problem_body(
     detail: str,
     instance: str,
     title: str | None = None,
+    type_slug: str | None = None,
     errors: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """Construct a problem+json body per the frozen error contract."""
+    """Construct a problem+json body per the frozen error contract.
+
+    `type_slug` overrides the status-code-derived slug (`_slug_for`) for
+    cases where the frozen contract needs two distinct `type` values under
+    the same HTTP status — e.g. `403` is overloaded by T15's
+    `must_change_password` compensating control (ADR-0009) alongside its
+    existing "account deactivated" meaning; a distinct `type` lets a
+    tolerant client tell the two apart without a status-code collision.
+    """
 
     body: dict[str, Any] = {
-        "type": f"{PROBLEM_BASE_URL}/{_slug_for(status_code)}",
+        "type": f"{PROBLEM_BASE_URL}/{type_slug or _slug_for(status_code)}",
         "title": title or _title_for(status_code),
         "status": status_code,
         "detail": detail,
@@ -113,6 +123,7 @@ def _problem_response(
     detail: str,
     instance: str,
     title: str | None = None,
+    type_slug: str | None = None,
     errors: list[dict[str, str]] | None = None,
 ) -> JSONResponse:
     body = build_problem_body(
@@ -120,6 +131,7 @@ def _problem_response(
         detail=detail,
         instance=instance,
         title=title,
+        type_slug=type_slug,
         errors=errors,
     )
     response = JSONResponse(status_code=status_code, content=body, media_type=PROBLEM_CONTENT_TYPE)
@@ -176,6 +188,33 @@ async def password_policy_exception_handler(request: Request, exc: Exception) ->
     )
 
 
+async def must_change_password_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Turn a `MustChangePasswordError` into the ADR-0009 compensating-control response.
+
+    T15 CONTRACT-GAP (documented in the frozen contract's T15 notice): the
+    contract does not define a wire shape for this outcome. This
+    implements the contract's option 2 — block with a distinct
+    `problem+json` `type` at `403` (`.../problems/must-change-password`)
+    rather than overloading the generic `.../problems/forbidden` type
+    that `403` otherwise means ("account deactivated"). This is a
+    contract *addition* (new, additive `type` slug only — no existing
+    status/shape changes) and should be confirmed with the API owner
+    before this becomes load-bearing for a client.
+    """
+
+    assert isinstance(exc, MustChangePasswordError)
+    return _problem_response(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            "Your password must be changed before you can log in. "
+            "Complete a password change to continue."
+        ),
+        instance=request.url.path,
+        title="Password change required",
+        type_slug="must-change-password",
+    )
+
+
 async def pagination_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Turn a `PaginationError` (malformed cursor / invalid limit) into `400`.
 
@@ -228,5 +267,6 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(PasswordPolicyError, password_policy_exception_handler)
+    app.add_exception_handler(MustChangePasswordError, must_change_password_error_handler)
     app.add_exception_handler(PaginationError, pagination_error_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
