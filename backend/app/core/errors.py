@@ -41,6 +41,7 @@ from app.core.pagination import PaginationError
 from app.core.password_policy import PasswordPolicyError
 from app.core.request_body import MalformedBodyError
 from app.services.auth import MustChangePasswordError
+from app.services.registration import RegistrationFieldError
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +217,25 @@ async def must_change_password_error_handler(request: Request, exc: Exception) -
     )
 
 
+async def registration_field_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Turn a `RegistrationFieldError` into the frozen `422` problem+json shape (T14).
+
+    Reused solely by `POST /v1/auth/register` for field-content failures
+    (out-of-range username length, blank first/last name) that Pydantic's
+    structural `min_length=1` alone cannot catch — mirrors
+    `password_policy_exception_handler`'s shape exactly, just for a
+    different set of fields.
+    """
+
+    assert isinstance(exc, RegistrationFieldError)
+    return _problem_response(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="One or more fields failed validation.",
+        instance=request.url.path,
+        errors=exc.errors,
+    )
+
+
 async def malformed_body_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Turn a `MalformedBodyError` into the frozen `400` problem+json shape.
 
@@ -289,6 +309,7 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(PasswordPolicyError, password_policy_exception_handler)
     app.add_exception_handler(MustChangePasswordError, must_change_password_error_handler)
+    app.add_exception_handler(RegistrationFieldError, registration_field_error_handler)
     app.add_exception_handler(MalformedBodyError, malformed_body_exception_handler)
     app.add_exception_handler(PaginationError, pagination_error_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)

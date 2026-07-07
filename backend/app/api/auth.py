@@ -1,16 +1,25 @@
-"""`POST /v1/auth/login`, `/refresh`, `/logout` (T15, ADR-0006, ADR-0009).
+"""`POST /v1/auth/login`, `/refresh`, `/logout`, `/register` (T14, T15, ADR-0006, ADR-0009).
 
 `GET`/`DELETE /v1/auth/sessions` live in `app.api.sessions` (T10) and are
 not touched here.
 
-Request bodies for `login`/`refresh` are parsed manually (raw JSON ->
-`model_validate`) rather than as FastAPI body-parameter types, so a
-malformed body maps to the frozen contract's `400` rather than the
+Request bodies for `login`/`refresh`/`register` are parsed manually (raw
+JSON -> `model_validate`) rather than as FastAPI body-parameter types, so
+a malformed body maps to the frozen contract's `400` rather than the
 framework-default `422` that the globally installed
 `RequestValidationError` handler produces (`app.core.errors`) — that `422`
 path is reserved by this contract for field-content validation failures
-(e.g. password policy), not structurally malformed JSON. `logout` takes no
+(e.g. password policy, username length, blank names). `logout` takes no
 parsed body at all (the contract's `{}` is accepted-and-ignored).
+
+`POST /v1/auth/register` (T14) redeems a `pending`/unexpired invite
+(`app.services.invites.find_valid_invite_by_token`, T13) and creates the
+invited user with their email locked to the invite's address — there is
+no invite-less registration path. Invite-validation, the `users` INSERT,
+and the invite's `pending -> accepted` transition (`app.services.invites
+.redeem_invite`) all happen in one transaction (`app.services
+.registration.build_registered_user`) so a duplicate-username/email
+failure never consumes the invite.
 """
 
 from __future__ import annotations
@@ -22,13 +31,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.deps import AuthenticatedUser, require_auth
+from app.core.password_policy import enforce_password_policy
 from app.db.redis import get_redis_client
 from app.db.session import get_db_session
 from app.schemas.auth import LoginRequest, LoginResponse, RefreshRequest, RefreshResponse
+from app.schemas.auth_register import RegisteredUser, RegisterRequest
 from app.schemas.user import UserOut
 from app.services.auth import (
     AccountDeactivatedError,
@@ -37,6 +49,13 @@ from app.services.auth import (
     MustChangePasswordError,
     authenticate_and_login,
     refresh_session,
+)
+from app.services.invites import find_valid_invite_by_token, redeem_invite
+from app.services.registration import (
+    DuplicateIdentityError,
+    build_registered_user,
+    check_identity_not_taken,
+    validate_registration_fields,
 )
 from app.services.session_revocation import invalidate_session_cache
 from app.services.sessions import revoke_session
@@ -52,6 +71,17 @@ _CurrentUser = Annotated[AuthenticatedUser, Depends(require_auth)]
 _INVALID_CREDENTIALS_DETAIL = "The email or password is incorrect."
 _ACCOUNT_DEACTIVATED_DETAIL = "This account has been deactivated."
 _INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid, revoked, or expired."
+_STALE_INVITE_DETAIL = "Invite token is expired, already used, or no longer valid."
+_DUPLICATE_IDENTITY_DETAIL = "This username or email is already registered."
+
+# Postgres SQLSTATE for `unique_violation` — same race-safe backstop
+# pattern as `app.services.bootstrap._is_unique_violation`.
+_UNIQUE_VIOLATION_SQLSTATE = "23505"
+
+
+def _is_unique_violation(exc: IntegrityError) -> bool:
+    sqlstate = getattr(exc.orig, "sqlstate", None)
+    return sqlstate == _UNIQUE_VIOLATION_SQLSTATE
 
 
 def _client_ip(request: Request) -> str | None:
@@ -202,3 +232,84 @@ async def logout(current: _CurrentUser, db: _DbSession) -> Response:
     await invalidate_session_cache(get_redis_client(), current.session_id)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/register", response_model=RegisteredUser, status_code=status.HTTP_201_CREATED)
+async def register(request: Request, db: _DbSession) -> RegisteredUser:
+    """Redeem a pending, unexpired invite and create the invited user (F5/F6).
+
+    There is no invite-less registration path — `invite_token` is
+    required and validated via
+    `app.services.invites.find_valid_invite_by_token` (T13). Status
+    mapping is exactly the frozen contract: `201` on success, `400`
+    malformed body, `409` duplicate username/email (case-insensitive),
+    `410` invite expired/used/revoked (F7), `422` password-policy or
+    field-content validation failure.
+
+    Invite-validation, the `users` INSERT, and the invite's
+    `pending -> accepted` transition happen in one transaction: a
+    duplicate-identity `IntegrityError` at flush time rolls both back, so
+    a failed registration never consumes the invite (the frozen data
+    model's transactional-integrity requirement).
+    """
+
+    body = await _parse_body(request, RegisterRequest)
+
+    invite = await find_valid_invite_by_token(db, body.invite_token)
+    if invite is None:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=_STALE_INVITE_DETAIL)
+
+    # Password policy runs before any DB write and before the duplicate
+    # check: a non-compliant password must never consume the invite or
+    # even hint at whether the username/email is already taken.
+    enforce_password_policy(body.password)
+
+    # `RegistrationFieldError` (username length / blank name) is left to
+    # propagate uncaught: `app.core.errors.registration_field_error_handler`
+    # is registered globally and renders the frozen 422 problem+json shape
+    # with a field-attributed `errors[]` array, mirroring
+    # `enforce_password_policy`'s `PasswordPolicyError` just above.
+    normalized_username = validate_registration_fields(
+        username=body.username, first_name=body.first_name, last_name=body.last_name
+    )
+
+    try:
+        await check_identity_not_taken(db, username=normalized_username, email=invite.email)
+    except DuplicateIdentityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_DUPLICATE_IDENTITY_DETAIL
+        ) from None
+
+    user = build_registered_user(
+        invite=invite,
+        username=normalized_username,
+        first_name=body.first_name,
+        last_name=body.last_name,
+        password=body.password,
+        avatar_url=body.avatar_url,
+    )
+    db.add(user)
+    redeem_invite(invite)
+
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        if not _is_unique_violation(exc):
+            raise
+        # Race-safe backstop: a concurrent registration won the unique
+        # index between our pre-check and this flush. The invite remains
+        # `pending` (this whole transaction rolled back), so the caller
+        # can retry with a different identity using the same token.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_DUPLICATE_IDENTITY_DETAIL
+        ) from None
+
+    await db.commit()
+
+    logger.info(
+        "user registered via invite redemption",
+        extra={"user_id": str(user.id), "invite_id": str(invite.id)},
+    )
+
+    return RegisteredUser.from_user(user)

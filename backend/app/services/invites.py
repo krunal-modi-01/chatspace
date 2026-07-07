@@ -16,9 +16,11 @@ the recipient's email address — log lines carry only ids and booleans
 
 Does **not** implement the `/v1/invites*` HTTP endpoints (`app.api.invites`)
 or send email (`app.services.email`, T11) — those are separate consumers
-that call into this module. Does **not** implement invite *redemption*
-(`POST /v1/auth/register`, T14) — this module only supports the System
-Admin issuance side and the public, non-consuming validation lookup.
+that call into this module. `redeem_invite` (T14) is the one piece of the
+redemption path that lives here (mirroring `revoke_invite`'s shape); the
+rest of `POST /v1/auth/register` (user creation, duplicate/password
+validation, transaction boundary) lives in `app.api.auth` and
+`app.services.registration`.
 """
 
 from __future__ import annotations
@@ -173,3 +175,24 @@ def revoke_invite(invite: Invite) -> None:
     """
 
     invite.status = InviteStatus.REVOKED
+
+
+def redeem_invite(invite: Invite, *, now: datetime | None = None) -> None:
+    """Mark `invite` as redeemed (`pending -> accepted`) on successful registration (T14).
+
+    Mirrors `revoke_invite`'s shape: a pure in-memory mutation, no flush/
+    commit of its own — the caller (`POST /v1/auth/register`) sets this in
+    the *same* transaction as the new user's `INSERT` and flushes/commits
+    both together, so a downstream failure (e.g. a duplicate-username/email
+    `IntegrityError`) rolls this back too and the invite remains `pending`
+    and redeemable.
+
+    Callers must have already obtained `invite` via
+    `find_valid_invite_by_token` (or an equivalent pending+unexpired check)
+    — this function does not itself re-validate status/expiry, matching
+    `revoke_invite`'s division of responsibility.
+    """
+
+    ts = now or datetime.now(UTC)
+    invite.status = InviteStatus.ACCEPTED
+    invite.accepted_at = ts

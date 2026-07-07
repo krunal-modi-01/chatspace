@@ -7,7 +7,9 @@ separately by the `app.ws` package in a later task.
 
 T10 adds the `/v1/auth/sessions` list/revoke routes (session store +
 `require_auth`, ADR-0006). T15 adds `/v1/auth/login`, `/refresh`, and
-`/logout` (`app.api.auth`). T16 adds `/v1/auth/password-reset`,
+`/logout` (`app.api.auth`). T14 adds `/v1/auth/register`
+(`app.api.auth`, invite redemption — depends on T13). T16 adds
+`/v1/auth/password-reset`,
 `/v1/auth/password-reset/confirm`, and `/v1/auth/password/change`
 (`app.api.password`). T17 adds `/v1/me` (own profile — `GET`/`PATCH`).
 T13 adds `/v1/invites*` (System Admin invite issuance/lifecycle,
