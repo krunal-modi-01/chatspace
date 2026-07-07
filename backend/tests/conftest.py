@@ -82,6 +82,7 @@ REQUIRED_ENV: dict[str, str] = {
     "SMTP_PASSWORD": "test-smtp-password",
     "SMTP_FROM_ADDRESS": "no-reply@chatspace.example",
     "PASSWORD_RESET_URL_BASE": "https://chatspace.example/reset-password",
+    "INVITE_URL_BASE": "https://chatspace.example/accept-invite",
     "S3_ENDPOINT_URL": "http://localhost:9000",
     "S3_BUCKET_NAME": "chatspace-media-test",
     "S3_ACCESS_KEY_ID": "test-access-key",

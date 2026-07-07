@@ -202,6 +202,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Invites (T13, F1) ---------------------------------------------------
+    invite_url_base: str = Field(
+        ...,
+        description=(
+            "Base URL of the frontend invite-acceptance page. The raw "
+            "single-use invite token is appended as a `?token=` query "
+            "parameter to build the link emailed to the invitee (T13); "
+            "never logged. Required (no default) so a missing/misconfigured "
+            "env var fails startup fast instead of emailing a broken invite "
+            "link built from a placeholder domain."
+        ),
+    )
+
     # --- S3-compatible object storage (ADR-0007) ----------------------------
     s3_endpoint_url: str = Field(
         ..., description="S3-compatible endpoint (e.g. MinIO local, R2, S3, Spaces)."

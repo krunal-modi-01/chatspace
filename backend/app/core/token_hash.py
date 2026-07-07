@@ -54,3 +54,16 @@ def hash_reset_token(raw_token: str) -> str:
     """
 
     return _sha256_hex(raw_token)
+
+
+def hash_invite_token(raw_token: str) -> str:
+    """Return the deterministic SHA-256 hex digest of a raw invite token.
+
+    Same construction and rationale as `hash_reset_token` above (T13): a
+    single-use invite token is likewise a high-entropy, server-generated
+    opaque secret looked up by equality (`invites.token_hash = ?` against
+    `uq_invites_token_hash`). Never logs or returns `raw_token` itself;
+    only this hash is ever persisted (`token_hash` column).
+    """
+
+    return _sha256_hex(raw_token)
