@@ -111,3 +111,30 @@ async def require_auth(
         raise _unauthorized()
 
     return AuthenticatedUser(user_id=user_id, session_id=session_id)
+
+
+_FORBIDDEN_DETAIL = "This action requires System Admin privileges."
+
+
+async def require_system_admin(
+    current: Annotated[AuthenticatedUser, Depends(require_auth)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AuthenticatedUser:
+    """`require_auth`, plus a `403` gate on `users.is_system_admin` (T13).
+
+    Backs every `/v1/invites*` System Admin-only route (frozen contract:
+    "`system_admin` role has invite + deactivate/reactivate powers only").
+    Re-reads `is_system_admin` fresh from Postgres on every call, same
+    freshness guarantee as `require_auth`'s `is_active` check — a
+    demotion takes effect on the caller's very next request, not after
+    some cache TTL.
+    """
+
+    # `require_auth` already proved this user exists and is active for
+    # this same request but does not hand back the loaded row — re-fetch
+    # here rather than re-deriving privilege from the JWT (which never
+    # carries a role claim).
+    user = await db.get(User, current.user_id)
+    if user is None or not user.is_system_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_FORBIDDEN_DETAIL)
+    return current
