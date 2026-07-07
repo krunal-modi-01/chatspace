@@ -11,11 +11,11 @@
 
 set -uo pipefail
 
-LOG_DIR="${CLAUDE_HOOK_LOG_DIR:-${CLAUDE_PROJECT_DIR:-.}/.claude/logs}"
-mkdir -p "$LOG_DIR" 2>/dev/null || true
-
-log() { # log <hook-name> <message>
-  printf '%s [%s] %s\n' "$(date -u +%FT%TZ 2>/dev/null || echo now)" "$1" "$2" >> "$LOG_DIR/hooks.log" 2>/dev/null || true
+# Hook logging is intentionally disabled: hooks write no log files and create
+# no log directory. `log` is kept as a no-op so existing call sites across the
+# hooks stay valid without each needing to be touched.
+log() { # log <hook-name> <message> — intentionally does nothing
+  :
 }
 
 # Read the raw JSON event from stdin once, cache it.
