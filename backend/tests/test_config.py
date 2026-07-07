@@ -1,3 +1,13 @@
+"""Settings validation tests.
+
+Every `Settings(...)` here passes `_env_file=None` so the tests read only
+from `os.environ` (which they control via monkeypatch) and never fall back
+to a developer's local `backend/.env`. Without this, "fails fast when a
+required var is missing" and the CORS-default tests pass on a bare CI runner
+but fail on any machine that has a `.env`, because `.env` silently supplies
+the var the test just deleted.
+"""
+
 from __future__ import annotations
 
 import pytest
@@ -13,7 +23,7 @@ def test_settings_loads_when_all_required_env_vars_present(
     for key, value in REQUIRED_ENV.items():
         monkeypatch.setenv(key, value)
 
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.database_url.get_secret_value() == REQUIRED_ENV["DATABASE_URL"]
     assert settings.jwt_signing_key.get_secret_value() == REQUIRED_ENV["JWT_SIGNING_KEY"]
@@ -30,7 +40,7 @@ def test_settings_fails_fast_when_a_required_var_is_missing(
     monkeypatch.delenv(missing_key, raising=False)
 
     with pytest.raises(ValidationError):
-        Settings()  # type: ignore[call-arg]
+        Settings(_env_file=None)  # type: ignore[call-arg]
 
 
 def test_settings_has_no_hardcoded_secret_defaults() -> None:
@@ -55,7 +65,7 @@ def test_cors_allowed_origins_parses_csv_string(monkeypatch: pytest.MonkeyPatch)
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://a.example, https://b.example")
 
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.cors_allowed_origins == ["https://a.example", "https://b.example"]
 
@@ -65,7 +75,7 @@ def test_cors_allowed_origins_defaults_to_empty_list(monkeypatch: pytest.MonkeyP
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
 
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.cors_allowed_origins == []
 
@@ -77,7 +87,7 @@ def test_cors_wildcard_origin_rejected_in_production(monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "*")
 
     with pytest.raises(ValidationError):
-        Settings()  # type: ignore[call-arg]
+        Settings(_env_file=None)  # type: ignore[call-arg]
 
 
 def test_cors_wildcard_origin_allowed_outside_production(
@@ -88,6 +98,6 @@ def test_cors_wildcard_origin_allowed_outside_production(
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "*")
 
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.cors_allowed_origins == ["*"]
