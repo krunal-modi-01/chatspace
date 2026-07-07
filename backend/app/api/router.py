@@ -5,15 +5,16 @@ WebSocket endpoint `/v1/ws` is reserved by the contract for real-time
 delivery and must never be stubbed as a REST route here — it is wired
 separately by the `app.ws` package in a later task.
 
-T01 intentionally mounts no business routes: only the operational
-health/readiness endpoints.
+T10 adds the `/v1/auth/sessions` list/revoke routes (session store +
+`require_auth`, ADR-0006). Login/logout/refresh are out of scope (T15).
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import health
+from app.api import health, sessions
 
 api_router = APIRouter(prefix="/v1")
 api_router.include_router(health.router)
+api_router.include_router(sessions.router)
