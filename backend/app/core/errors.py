@@ -39,6 +39,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.correlation import HEADER_NAME, get_correlation_id
 from app.core.pagination import PaginationError
 from app.core.password_policy import PasswordPolicyError
+from app.core.request_body import MalformedBodyError
 from app.services.auth import MustChangePasswordError
 
 logger = logging.getLogger(__name__)
@@ -215,6 +216,26 @@ async def must_change_password_error_handler(request: Request, exc: Exception) -
     )
 
 
+async def malformed_body_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Turn a `MalformedBodyError` into the frozen `400` problem+json shape.
+
+    Reused by every endpoint (T16's `/v1/auth/password*`, and future
+    endpoints) that manually validates its body via
+    `app.core.request_body.parse_body` to distinguish a malformed body
+    (`400`) from a business-rule failure like password policy (`422`) —
+    see that module's docstring for why FastAPI's automatic body
+    validation cannot make this distinction on its own.
+    """
+
+    assert isinstance(exc, MalformedBodyError)
+    return _problem_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Request body is malformed.",
+        instance=request.url.path,
+        errors=exc.errors,
+    )
+
+
 async def pagination_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Turn a `PaginationError` (malformed cursor / invalid limit) into `400`.
 
@@ -268,5 +289,6 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(PasswordPolicyError, password_policy_exception_handler)
     app.add_exception_handler(MustChangePasswordError, must_change_password_error_handler)
+    app.add_exception_handler(MalformedBodyError, malformed_body_exception_handler)
     app.add_exception_handler(PaginationError, pagination_error_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
