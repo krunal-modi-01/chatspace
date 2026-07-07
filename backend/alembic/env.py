@@ -5,6 +5,13 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+# Import the models package (not just `app.db.base`) so every mapped class
+# registers itself on `Base.metadata` before `target_metadata` is captured
+# below. Without this, `Base.metadata` is empty from Alembic's point of
+# view and `--autogenerate` wrongly proposes dropping every real table
+# (T10 finding: this masked whether the `sessions.refresh_token_hash`
+# mapping drifts from the shipped `uq_sessions_refresh_hash` index).
+import app.models  # noqa: F401
 from alembic import context
 
 # Wire Alembic to the same `Settings` (env-var driven config) the app uses,

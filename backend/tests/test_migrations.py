@@ -38,9 +38,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from alembic import command
 
-pytestmark = pytest.mark.usefixtures("configured_env")
+# Import the per-worktree test DSN from conftest rather than hardcoding it, so
+# these real upgrade/downgrade cycles run against this worktree's isolated
+# database instead of colliding on the shared `chatspace_test`.
+from .conftest import ASYNC_DATABASE_URL
 
-ASYNC_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/chatspace_test"
+pytestmark = pytest.mark.usefixtures("configured_env")
 
 EXPECTED_TABLES = {
     "alembic_version",

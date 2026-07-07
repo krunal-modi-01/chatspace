@@ -118,6 +118,30 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256")
     jwt_access_token_ttl_minutes: int = Field(default=15)
 
+    # --- Session store / revocation cache (T10, ADR-0006) -------------------
+    session_ttl_days: int = Field(
+        default=30,
+        gt=0,
+        description=(
+            "Sliding refresh-token session lifetime in days (contract: 30-day "
+            "sliding expiry). `sessions.expires_at` is set to now + this value "
+            "on creation and recomputed on refresh."
+        ),
+    )
+    session_revocation_cache_ttl_seconds: int = Field(
+        default=30,
+        gt=0,
+        description=(
+            "TTL for a cached session-revocation-check result in Redis "
+            "(ADR-0006). Bounds how stale a positive ('active') cache hit "
+            "can be for a *different* app instance than the one that revoked "
+            "it — the instance that performs the revoke always busts its own "
+            "cache entry immediately, and `require_auth` always re-checks "
+            "`users.is_active` fresh against Postgres on every request "
+            "regardless of this cache."
+        ),
+    )
+
     # --- SMTP / transactional email (ADR-0010) ------------------------------
     smtp_host: str = Field(..., description="SMTP server host.")
     smtp_port: int = Field(..., gt=0, le=65535, description="SMTP server port.")
@@ -183,6 +207,12 @@ class Settings(BaseSettings):
     )
     bootstrap_admin_username: str = Field(
         ..., description="Username of the env-seeded first-run System Admin account."
+    )
+    bootstrap_admin_first_name: str = Field(
+        ..., description="First name of the env-seeded first-run System Admin account."
+    )
+    bootstrap_admin_last_name: str = Field(
+        ..., description="Last name of the env-seeded first-run System Admin account."
     )
 
     @field_validator("cors_allowed_origins", mode="before")
