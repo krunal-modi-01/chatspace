@@ -24,6 +24,10 @@ from __future__ import annotations
 import hashlib
 
 
+def _sha256_hex(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
 def hash_refresh_token(raw_token: str) -> str:
     """Return the deterministic SHA-256 hex digest of `raw_token`.
 
@@ -34,4 +38,19 @@ def hash_refresh_token(raw_token: str) -> str:
     `raw_token` itself.
     """
 
-    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    return _sha256_hex(raw_token)
+
+
+def hash_reset_token(raw_token: str) -> str:
+    """Return the deterministic SHA-256 hex digest of a raw password-reset token.
+
+    Same construction and rationale as `hash_refresh_token` above (T16,
+    F15-F17): a password-reset token is likewise a high-entropy,
+    server-generated opaque secret looked up by equality
+    (`password_reset_tokens.token_hash = ?` against `uq_prt_token_hash`),
+    so a fast, deterministic, unsalted hash is the correct construction —
+    never a slow salted KDF like bcrypt. Never logs or returns `raw_token`
+    itself; only this hash is ever persisted (`token_hash` column).
+    """
+
+    return _sha256_hex(raw_token)

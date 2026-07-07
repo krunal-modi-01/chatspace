@@ -60,7 +60,9 @@ _REDIS_DB = (int(_WORKTREE_SUFFIX, 16) % 14) + 2 if _WORKTREE_SUFFIX else 1
 # Same DSN as `REQUIRED_ENV["DATABASE_URL"]` below, spelled out separately
 # because it is consumed directly by `sqlalchemy.create_async_engine`
 # (outside of `Settings`) by the `db_session` fixture.
-ASYNC_DATABASE_URL = f"postgresql+asyncpg://{_PG_USER}:{_PG_PASS}@{_PG_HOST}:{_PG_PORT}/{_TEST_DB_NAME}"
+ASYNC_DATABASE_URL = (
+    f"postgresql+asyncpg://{_PG_USER}:{_PG_PASS}@{_PG_HOST}:{_PG_PORT}/{_TEST_DB_NAME}"
+)
 # Maintenance connection to the `postgres` database, used only to CREATE/DROP
 # the per-worktree test database (CREATE/DROP DATABASE can't run in a txn).
 _PG_ADMIN_URL = f"postgresql+asyncpg://{_PG_USER}:{_PG_PASS}@{_PG_HOST}:{_PG_PORT}/postgres"
@@ -79,6 +81,7 @@ REQUIRED_ENV: dict[str, str] = {
     "SMTP_USERNAME": "test",
     "SMTP_PASSWORD": "test-smtp-password",
     "SMTP_FROM_ADDRESS": "no-reply@chatspace.example",
+    "PASSWORD_RESET_URL_BASE": "https://chatspace.example/reset-password",
     "S3_ENDPOINT_URL": "http://localhost:9000",
     "S3_BUCKET_NAME": "chatspace-media-test",
     "S3_ACCESS_KEY_ID": "test-access-key",

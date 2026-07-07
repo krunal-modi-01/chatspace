@@ -141,6 +141,47 @@ def extend_session_expiry(
     session.expires_at = current_time + timedelta(days=session_ttl_days)
 
 
+async def revoke_sessions_for_user(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    except_session_id: UUID | None = None,
+    now: datetime | None = None,
+) -> list[UUID]:
+    """Revoke every active session for `user_id`, optionally keeping one.
+
+    Two T16 callers reuse this: password-reset confirm (F16) revokes
+    **every** active session for the user — there is no initiating session
+    to keep, since reset is unauthenticated — by leaving
+    `except_session_id=None`; password change (F22) keeps the initiating
+    session alive by passing its `session_id`.
+
+    Returns the ids actually revoked so the caller can bust each one's
+    Redis revocation-cache entry (`app.services.session_revocation.
+    invalidate_session_cache`) immediately — this function only updates
+    Postgres, mirroring `revoke_session`'s division of responsibility.
+    """
+
+    ts = now or datetime.now(UTC)
+    sessions = await list_active_sessions_for_user(db, user_id)
+
+    revoked_ids: list[UUID] = []
+    for session in sessions:
+        if except_session_id is not None and session.id == except_session_id:
+            continue
+        session.revoked_at = ts
+        revoked_ids.append(session.id)
+
+    if revoked_ids:
+        await db.flush()
+        logger.info(
+            "sessions bulk-revoked",
+            extra={"user_id": str(user_id), "revoked_count": len(revoked_ids)},
+        )
+
+    return revoked_ids
+
+
 class RevokeOutcome(Enum):
     """Result of attempting to revoke a session (DELETE `/v1/auth/sessions/{id}`)."""
 
