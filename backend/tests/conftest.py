@@ -140,14 +140,19 @@ async def _reset_users_table() -> None:
 
 
 @pytest.fixture
-def client(configured_env: None, postgres_available: bool) -> Iterator[TestClient]:
+def client(
+    configured_env: None, postgres_available: bool, migrated_db: None
+) -> Iterator[TestClient]:
     """A `TestClient` for a fully started app.
 
     T12's System Admin bootstrap is a non-skippable Phase-0 startup
     routine that runs a real DB round-trip in the app's lifespan — so
     building this app for real requires the `users` table to exist.
-    Skipped (not failed) when no local test Postgres is reachable,
-    mirroring every other DB-backed fixture in this file.
+    Depends on `migrated_db` so the schema is present (migrated to head,
+    incl. 0002) before the app boots and bootstraps — otherwise a prior
+    DB test's schema reset would leave `users` absent. Skipped (not
+    failed) when no local test Postgres is reachable, mirroring every
+    other DB-backed fixture in this file.
     """
 
     if not postgres_available:
