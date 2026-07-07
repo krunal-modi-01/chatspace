@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.correlation import HEADER_NAME, get_correlation_id
+from app.core.pagination import PaginationError
 from app.core.password_policy import PasswordPolicyError
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,25 @@ async def password_policy_exception_handler(request: Request, exc: Exception) ->
     )
 
 
+async def pagination_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Turn a `PaginationError` (malformed cursor / invalid limit) into `400`.
+
+    Per the Pagination contract clause, a malformed `cursor` or an invalid
+    `limit` is a `400`, not the generic `422` validation shape — this is a
+    distinct handler (not `RequestValidationError`) so the status code
+    stays exactly `400` as the contract requires. Never echoes the raw
+    (client-supplied, opaque) cursor value back in the response.
+    """
+
+    assert isinstance(exc, PaginationError)
+    return _problem_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=exc.detail,
+        instance=request.url.path,
+        errors=[{"field": exc.field, "detail": exc.detail}],
+    )
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     # Never leak internals (stack traces, exception messages) into the response;
     # the correlation id is the join key back to the (separately logged) detail.
@@ -208,4 +228,5 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(PasswordPolicyError, password_policy_exception_handler)
+    app.add_exception_handler(PaginationError, pagination_error_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
