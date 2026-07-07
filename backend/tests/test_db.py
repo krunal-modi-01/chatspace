@@ -71,6 +71,8 @@ def _build_settings(**overrides: object) -> Settings:
         "bootstrap_admin_email": "admin@chatspace.example",
         "bootstrap_admin_password": "pw",
         "bootstrap_admin_username": "admin",
+        "bootstrap_admin_first_name": "System",
+        "bootstrap_admin_last_name": "Admin",
     }
     defaults.update(overrides)
     return Settings(**defaults)  # type: ignore[arg-type]

@@ -24,7 +24,8 @@ from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import correlation_id_middleware
 from app.db.redis import dispose_redis_client
-from app.db.session import dispose_engine
+from app.db.session import dispose_engine, get_sessionmaker
+from app.services.bootstrap import ensure_system_admin_bootstrapped
 from app.services.email import verify_email_config
 
 logger = logging.getLogger(__name__)
@@ -32,13 +33,31 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Dispose the DB engine's and Redis client's pooled connections on shutdown.
+    """Run the non-skippable Phase-0 System Admin bootstrap, then serve.
 
-    Both are created lazily (see `app.db.session.get_engine` and
-    `app.db.redis.get_redis_client`) on first use — typically the first
-    `/v1/readyz` call or a DB/Redis-backed request — so there is nothing
-    to open here, only to close cleanly.
+    ADR-0009 / technical spec §10 (Phase 0) / FS F8-F9: the app must
+    never finish starting up into a workspace with zero System Admins.
+    `ensure_system_admin_bootstrapped` is idempotent (a no-op once any
+    user exists) but, on failure, raises `BootstrapError` — deliberately
+    left uncaught here so application startup aborts and the process
+    refuses to serve, mirroring `verify_email_config`'s fail-loud posture
+    in `create_app` below (ADR-0010).
+
+    The DB engine is created lazily elsewhere (see
+    `app.db.session.get_engine`) — this is the first guaranteed real DB
+    round-trip of the process lifecycle, and it runs before `yield`, i.e.
+    before the ASGI server is considered ready to accept traffic.
     """
+
+    settings = get_settings()
+    session_factory = get_sessionmaker()
+    async with session_factory() as session:
+        try:
+            await ensure_system_admin_bootstrapped(session, settings)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
     yield
     await dispose_engine()

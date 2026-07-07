@@ -43,12 +43,16 @@ def test_readyz_returns_200_when_database_and_redis_reachable(
 
 
 def test_readyz_returns_503_when_redis_unreachable(
-    configured_env: None, monkeypatch: pytest.MonkeyPatch, postgres_available: bool
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Redis down degrades readyz to 503 — it must never crash the process (T05)."""
+    """Redis down degrades readyz to 503 — it must never crash the process (T05).
 
-    if not postgres_available:
-        pytest.skip("local Postgres not reachable on localhost:5432")
+    Redis must be reachable at *startup* (via the `client` fixture) since
+    it's checked incidentally by other app wiring; this test breaks it
+    only afterwards, at request time — the scenario `/v1/readyz` is meant
+    to degrade gracefully from (Redis being down does not gate T12's
+    bootstrap, which only needs Postgres).
+    """
 
     import socket
 
@@ -64,11 +68,7 @@ def test_readyz_returns_503_when_redis_unreachable(
     get_settings.cache_clear()
     get_redis_client.cache_clear()
 
-    from app.main import create_app
-
-    app = create_app()
-    with TestClient(app) as test_client:
-        response = test_client.get("/v1/readyz")
+    response = client.get("/v1/readyz")
 
     assert response.status_code == 503
     body = response.json()
@@ -101,8 +101,8 @@ def test_readyz_returns_503_when_a_dependency_is_unavailable(
     assert db_check["status"] == "unavailable"
 
 
-async def test_readyz_returns_503_not_500_when_database_connection_is_refused(
-    configured_env: None, monkeypatch: pytest.MonkeyPatch
+def test_readyz_returns_503_not_500_when_database_connection_is_refused(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Regression: a refused Postgres connection must surface as 503, not 500.
 
@@ -110,12 +110,20 @@ async def test_readyz_returns_503_not_500_when_database_connection_is_refused(
     that actively refuses connections, so asyncpg raises a bare
     `ConnectionRefusedError` — an `OSError`, not a `SQLAlchemyError` — which
     must be caught and turned into a 503, not escape as an unhandled 500.
+
+    Postgres must be reachable at *startup* (via the `client` fixture) so
+    the T12 System Admin bootstrap can succeed — this test breaks the
+    connection only afterwards, at request time, which is the scenario
+    `check_database`/`/v1/readyz` are meant to degrade gracefully from. A
+    DB that is already unreachable *at startup* is a different, fatal
+    scenario covered by `tests/test_bootstrap.py`.
     """
 
     import socket
 
     from app.core.config import get_settings
-    from app.db.session import dispose_engine, get_engine, get_sessionmaker
+    from app.db.session import get_engine, get_sessionmaker
+    from tests.conftest import REQUIRED_ENV
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -130,11 +138,7 @@ async def test_readyz_returns_503_not_500_when_database_connection_is_refused(
     get_engine.cache_clear()
     get_sessionmaker.cache_clear()
 
-    from app.main import create_app
-
-    app = create_app()
-    with TestClient(app) as test_client:
-        response = test_client.get("/v1/readyz")
+    response = client.get("/v1/readyz")
 
     assert response.status_code == 503
     body = response.json()
@@ -142,10 +146,15 @@ async def test_readyz_returns_503_not_500_when_database_connection_is_refused(
     db_check = next(c for c in body["checks"] if c["name"] == "database")
     assert db_check["status"] == "unavailable"
 
+    # Restore a real, reachable DATABASE_URL *before* returning, rather than
+    # relying on `monkeypatch`'s own teardown timing relative to the
+    # `client` fixture's — the `client` fixture downgrades the schema via
+    # its own fresh DB connection on teardown, which must not race against
+    # this test's broken-port override still being in effect.
+    monkeypatch.setenv("DATABASE_URL", REQUIRED_ENV["DATABASE_URL"])
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_sessionmaker.cache_clear()
-    await dispose_engine()
 
 
 def test_ws_path_is_not_mounted_as_rest_route(client: TestClient) -> None:

@@ -208,6 +208,12 @@ class Settings(BaseSettings):
     bootstrap_admin_username: str = Field(
         ..., description="Username of the env-seeded first-run System Admin account."
     )
+    bootstrap_admin_first_name: str = Field(
+        ..., description="First name of the env-seeded first-run System Admin account."
+    )
+    bootstrap_admin_last_name: str = Field(
+        ..., description="Last name of the env-seeded first-run System Admin account."
+    )
 
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod

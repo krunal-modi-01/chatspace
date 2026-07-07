@@ -70,24 +70,23 @@ def test_password_policy_error_handler_is_registered(configured_env: None) -> No
     assert PasswordPolicyError in app.exception_handlers
 
 
-def test_password_policy_error_renders_as_422_problem_json(
-    configured_env: None,
-) -> None:
+def test_password_policy_error_renders_as_422_problem_json(client: TestClient) -> None:
     """Wire a throwaway route that raises `PasswordPolicyError` and assert
     the response matches the frozen 422 problem+json shape with a
-    field-level `errors[]` array (F23)."""
+    field-level `errors[]` array (F23).
+
+    Uses the shared `client` fixture (rather than building its own app via
+    `create_app()`) since app startup now runs the T12 System Admin
+    bootstrap, which requires a migrated `users` table.
+    """
 
     from app.core.password_policy import enforce_password_policy
-    from app.main import create_app
 
-    app = create_app()
-
-    @app.get("/v1/__test-password-policy")
+    @client.app.get("/v1/__test-password-policy")  # type: ignore[union-attr]
     def _raise_policy_error() -> None:
         enforce_password_policy("a1", field_name="new_password")
 
-    with TestClient(app) as test_client:
-        response = test_client.get("/v1/__test-password-policy")
+    response = client.get("/v1/__test-password-policy")
 
     assert response.status_code == 422
     assert response.headers["content-type"].startswith("application/problem+json")

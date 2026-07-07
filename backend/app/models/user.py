@@ -43,6 +43,16 @@ class User(Base):
     is_system_admin: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    # ADR-0009 compensating control for the env-seeded bootstrap admin (T12):
+    # added by `alembic/versions/0002_admin_bootstrap_flags.py`, not the frozen
+    # 0001 migration. Regular users default False for both; the bootstrap
+    # routine sets both True on the seeded System Admin.
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")

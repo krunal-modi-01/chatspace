@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
 from collections.abc import AsyncIterator, Iterator
 
@@ -33,8 +34,18 @@ REQUIRED_ENV: dict[str, str] = {
     "S3_SECRET_ACCESS_KEY": "test-secret-key",
     "BOOTSTRAP_ADMIN_EMAIL": "admin@chatspace.example",
     "BOOTSTRAP_ADMIN_USERNAME": "admin",
-    "BOOTSTRAP_ADMIN_PASSWORD": "test-bootstrap-password",
+    # Must satisfy `app.core.password_policy.enforce_password_policy`
+    # (letter + digit, >= 6 chars) since `ensure_system_admin_bootstrapped`
+    # (T12) now enforces the same policy as every other password path.
+    "BOOTSTRAP_ADMIN_PASSWORD": "test-bootstrap-password-1",
+    "BOOTSTRAP_ADMIN_FIRST_NAME": "System",
+    "BOOTSTRAP_ADMIN_LAST_NAME": "Admin",
 }
+
+# Matches `REQUIRED_ENV["DATABASE_URL"]` above — used by the `client`
+# fixture to migrate/reset the schema the T12 bootstrap routine needs at
+# every application startup.
+_TEST_DATABASE_URL = REQUIRED_ENV["DATABASE_URL"]
 
 
 @pytest.fixture
@@ -46,13 +57,117 @@ def configured_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
+def _local_postgres_reachable() -> bool:
+    host, port = "localhost", 5432
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Migrate the test schema to `head` exactly once for the whole run.
+
+    T12's System Admin bootstrap runs a real DB round-trip at every app
+    startup, so every `client`/`db_sessionmaker`-based test needs the
+    `users` table to exist. Doing that migration once, deterministically,
+    *before* any fixture is resolved — rather than lazily inside a
+    session-scoped fixture — sidesteps ordering ambiguity between
+    fixtures of different scopes (a module/session-scoped fixture and a
+    function-scoped one can legitimately run in either order depending on
+    what a given test also requests) and the repeated `CREATE TYPE`/`DROP
+    TYPE` churn that made a once-per-test migration both slow and,
+    empirically, a source of flakiness against a live Postgres.
+
+    A no-op (skipped entirely) when no local test Postgres is reachable —
+    DB-backed tests are individually skipped via `postgres_available`,
+    matching every other DB-backed fixture in this file.
+    """
+
+    session.config._chatspace_pg_available = _local_postgres_reachable()  # type: ignore[attr-defined]
+    if not session.config._chatspace_pg_available:  # type: ignore[attr-defined]
+        return
+
+    os.environ.update(REQUIRED_ENV)
+
+    from alembic.config import Config
+
+    from alembic import command
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    command.upgrade(Config("alembic.ini"), "head")
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Downgrade the test schema back to `base`, undoing `pytest_sessionstart`.
+
+    Best-effort: `tests/test_migrations.py` independently drives its own
+    full upgrade/downgrade cycles against the same database as part of
+    its own tests, so the schema may already be at `base` by the time
+    this runs — that's fine, `alembic downgrade base` from `base` is a
+    no-op, and this function tolerates it failing outright too (e.g. the
+    connection was already torn down some other way).
+    """
+
+    if not getattr(session.config, "_chatspace_pg_available", False):
+        return
+
+    from alembic.config import Config
+
+    from alembic import command
+
+    try:
+        command.downgrade(Config("alembic.ini"), "base")
+    except Exception:
+        pass
+
+
+async def _reset_users_table() -> None:
+    """Delete every row from `users` for the next `client`-fixture test.
+
+    Uses its own throwaway engine rather than the app's cached one, since
+    the app's engine/session-factory caches are cleared around each test.
+    """
+
+    engine = create_async_engine(_TEST_DATABASE_URL)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("DELETE FROM users"))
+    finally:
+        await engine.dispose()
+
+
 @pytest.fixture
-def client(configured_env: None) -> Iterator[TestClient]:
+def client(configured_env: None, postgres_available: bool) -> Iterator[TestClient]:
+    """A `TestClient` for a fully started app.
+
+    T12's System Admin bootstrap is a non-skippable Phase-0 startup
+    routine that runs a real DB round-trip in the app's lifespan — so
+    building this app for real requires the `users` table to exist.
+    Skipped (not failed) when no local test Postgres is reachable,
+    mirroring every other DB-backed fixture in this file.
+    """
+
+    if not postgres_available:
+        pytest.skip(
+            "local Postgres not reachable on localhost:5432 "
+            "(required: T12 System Admin bootstrap runs at app startup)"
+        )
+
+    import asyncio
+
     from app.core.config import get_settings
     from app.db.redis import get_redis_client
+    from app.db.session import get_engine, get_sessionmaker
 
     get_settings.cache_clear()
     get_redis_client.cache_clear()
+    get_engine.cache_clear()
+    get_sessionmaker.cache_clear()
+
+    asyncio.run(_reset_users_table())
 
     from app.main import create_app
 
@@ -62,6 +177,8 @@ def client(configured_env: None) -> Iterator[TestClient]:
 
     get_settings.cache_clear()
     get_redis_client.cache_clear()
+    get_engine.cache_clear()
+    get_sessionmaker.cache_clear()
 
 
 @pytest.fixture(scope="session")
