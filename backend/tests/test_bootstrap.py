@@ -43,17 +43,19 @@ def _bootstrap_settings(**overrides: object) -> Settings:
 
 @pytest.fixture
 async def db_sessionmaker(
-    postgres_available: bool,
+    postgres_available: bool, migrated_db: None
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    """A fresh engine/sessionmaker per test, with `users` reset beforehand.
+    """A fresh engine/sessionmaker per test, against a freshly migrated schema.
 
-    Reuses the schema migrated once for the whole test session (see
-    `conftest.py`'s `pytest_sessionstart`) rather than driving its own
-    upgrade/downgrade — a second, independent schema-provisioning fixture
-    running concurrently with that would race it (both trying to `CREATE
-    TYPE`/`DROP TABLE` the same objects). Resetting via `DELETE FROM
-    users` (not a migration) is what gives each test the "zero users"
-    bootstrap precondition.
+    Depends on `migrated_db` (conftest) so the schema is reset to `head`
+    before each test — mirroring the `client` fixture. Relying instead on
+    the once-per-session `pytest_sessionstart` migration is unsafe: any
+    other test that drives `downgrade base` (e.g. `test_migrations.py`, or
+    the downgrade test in this module) can run first and leave `users`
+    absent, so a bare `DELETE FROM users` here would error at setup
+    depending on collection order. `migrated_db` already yields an empty
+    schema, giving each test the "zero users" bootstrap precondition; the
+    `DELETE FROM users` below is kept as a cheap, explicit guard.
     """
 
     if not postgres_available:
