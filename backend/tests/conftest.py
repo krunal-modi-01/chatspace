@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import socket
+import subprocess
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -10,18 +12,67 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+# ── Per-worktree test isolation ───────────────────────────────────────────
+# The feature-flow workflow runs parallel tasks in separate git worktrees on
+# the SAME host, so they share one Postgres server and one Redis server. The
+# `migrated_db` fixture drops/recreates the `public` schema and terminates
+# every other connection to its database — so against a single shared
+# `chatspace_test`, concurrent worktree runs sabotage each other (dropped
+# schema + killed connections → flaky `relation "users" does not exist`).
+#
+# Fix: derive the test database name and Redis index from the worktree, so
+# each *linked* worktree gets its own isolated data layer while the main
+# checkout keeps the historical defaults (`chatspace_test`, Redis db 1).
+_PG_HOST, _PG_PORT, _PG_USER, _PG_PASS = "localhost", 5432, "postgres", "postgres"
+_REDIS_HOST, _REDIS_PORT = "localhost", 6379
+
+
+def _worktree_suffix() -> str | None:
+    """Stable short id for a *linked* git worktree, or None for the main checkout.
+
+    A linked worktree's top-level `.git` is a FILE (`gitdir: …`); the main
+    checkout's is a directory. That distinction needs no extra git plumbing
+    and degrades safely (returns None) when git isn't available at all.
+    """
+
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if not top or not os.path.isfile(os.path.join(top, ".git")):
+        return None  # main checkout (`.git` is a dir) or not a git repo
+    return hashlib.sha1(os.path.realpath(top).encode()).hexdigest()[:8]
+
+
+_WORKTREE_SUFFIX = _worktree_suffix()
+_TEST_DB_NAME = f"chatspace_test_{_WORKTREE_SUFFIX}" if _WORKTREE_SUFFIX else "chatspace_test"
+# Main checkout keeps Redis db 1; each worktree maps to 2..15 (14 slots), so a
+# worktree never collides with the main checkout's db 1 nor the db 0 used by
+# the "redis down" tests.
+_REDIS_DB = (int(_WORKTREE_SUFFIX, 16) % 14) + 2 if _WORKTREE_SUFFIX else 1
+
 # Same DSN as `REQUIRED_ENV["DATABASE_URL"]` below, spelled out separately
 # because it is consumed directly by `sqlalchemy.create_async_engine`
 # (outside of `Settings`) by the `db_session` fixture.
-ASYNC_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/chatspace_test"
+ASYNC_DATABASE_URL = f"postgresql+asyncpg://{_PG_USER}:{_PG_PASS}@{_PG_HOST}:{_PG_PORT}/{_TEST_DB_NAME}"
+# Maintenance connection to the `postgres` database, used only to CREATE/DROP
+# the per-worktree test database (CREATE/DROP DATABASE can't run in a txn).
+_PG_ADMIN_URL = f"postgresql+asyncpg://{_PG_USER}:{_PG_PASS}@{_PG_HOST}:{_PG_PORT}/postgres"
+_REDIS_URL = f"redis://{_REDIS_HOST}:{_REDIS_PORT}/{_REDIS_DB}"
 
 REQUIRED_ENV: dict[str, str] = {
     # A real, reachable local Postgres used by the `check_database` /
     # `/v1/readyz` happy-path tests (T03) and by the Alembic baseline
     # smoke test. Integration tests that need it are skipped (not failed)
     # when it isn't reachable — see `postgres_available` in this file.
-    "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@localhost:5432/chatspace_test",
-    "REDIS_URL": "redis://localhost:6379/1",
+    "DATABASE_URL": ASYNC_DATABASE_URL,
+    "REDIS_URL": _REDIS_URL,
     "JWT_SIGNING_KEY": "test-signing-key-not-a-real-secret",
     "SMTP_HOST": "localhost",
     "SMTP_PORT": "1025",
@@ -66,6 +117,58 @@ def _local_postgres_reachable() -> bool:
         return False
 
 
+async def _ensure_database_exists() -> None:
+    """Create this worktree's test database if it doesn't yet exist.
+
+    A no-op for the main checkout, whose `chatspace_test` is expected to
+    already exist. `CREATE DATABASE` cannot run inside a transaction, so it
+    goes over an AUTOCOMMIT connection to the `postgres` maintenance database.
+    """
+
+    if not _WORKTREE_SUFFIX:
+        return
+    engine = create_async_engine(_PG_ADMIN_URL, isolation_level="AUTOCOMMIT")
+    try:
+        async with engine.connect() as conn:
+            exists = await conn.scalar(
+                text("SELECT 1 FROM pg_database WHERE datname = :n"),
+                {"n": _TEST_DB_NAME},
+            )
+            if not exists:
+                # `_TEST_DB_NAME` is a hex-suffixed literal we control, not
+                # user input, but quote the identifier defensively anyway.
+                await conn.execute(text(f'CREATE DATABASE "{_TEST_DB_NAME}"'))
+    finally:
+        await engine.dispose()
+
+
+async def _drop_database() -> None:
+    """Best-effort drop of this worktree's test database on session teardown.
+
+    Keeps per-worktree `chatspace_test_<hash>` databases from piling up as the
+    workflow churns through worktrees. Never touches the main checkout's DB.
+    """
+
+    if not _WORKTREE_SUFFIX:
+        return
+    from app.db.session import dispose_engine
+
+    await dispose_engine()
+    engine = create_async_engine(_PG_ADMIN_URL, isolation_level="AUTOCOMMIT")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :n AND pid <> pg_backend_pid()"
+                ),
+                {"n": _TEST_DB_NAME},
+            )
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{_TEST_DB_NAME}"'))
+    finally:
+        await engine.dispose()
+
+
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Migrate the test schema to `head` exactly once for the whole run.
 
@@ -97,6 +200,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     from app.core.config import get_settings
 
     get_settings.cache_clear()
+    # In a worktree, our isolated database may not exist yet — create it
+    # before migrating. No-op for the main checkout's `chatspace_test`.
+    asyncio.run(_ensure_database_exists())
     command.upgrade(Config("alembic.ini"), "head")
 
 
@@ -112,6 +218,15 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """
 
     if not getattr(session.config, "_chatspace_pg_available", False):
+        return
+
+    # A worktree owns its whole database — drop it outright so isolated
+    # test databases don't accumulate as the workflow churns worktrees.
+    if _WORKTREE_SUFFIX:
+        try:
+            asyncio.run(_drop_database())
+        except Exception:
+            pass
         return
 
     from alembic.config import Config
