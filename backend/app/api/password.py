@@ -230,6 +230,12 @@ async def confirm_password_reset(payload: _Payload, db: _DbSession) -> Response:
 
     mark_reset_token_used(token)
     user.hashed_password = hash_password(body.new_password)
+    # T42/ADR-0011: proving control of the reset token (mailed, single-use)
+    # is a stronger bar than knowing the original temp/bootstrap password,
+    # so successfully completing this flow also clears any forced
+    # password-change requirement — this is the only exit path for an
+    # account with must_change_password=true (see ADR-0009/ADR-0011).
+    user.must_change_password = False
     # F16: every one of the user's other active sessions is invalidated —
     # there is no initiating session to keep here (reset is unauthenticated).
     revoked_session_ids = await revoke_sessions_for_user(db, user_id=user.id)
@@ -261,6 +267,10 @@ async def change_password(payload: _Payload, current: _CurrentUser, db: _DbSessi
     enforce_password_policy(body.new_password, field_name="new_password")
 
     user.hashed_password = hash_password(body.new_password)
+    # T42/ADR-0011: an authenticated session hitting this endpoint while
+    # must_change_password is set has also proven the current password —
+    # clear the flag so it does not block a future login.
+    user.must_change_password = False
     # F22: keep the initiating session alive, revoke every other one.
     revoked_session_ids = await revoke_sessions_for_user(
         db, user_id=user.id, except_session_id=current.session_id

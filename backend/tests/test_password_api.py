@@ -444,6 +444,51 @@ class TestPasswordResetConfirm:
         assert response.status_code == 400
         assert response.headers["content-type"] == "application/problem+json"
 
+    async def test_must_change_password_account_can_unblock_via_reset_and_then_login(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        redis_available: bool,
+        fake_email_service: _FakeEmailService,
+    ) -> None:
+        """T42/ADR-0011: reset-confirm is the exit path for a
+        `must_change_password=true` account (e.g. the ADR-0009 bootstrap
+        admin) — completing the existing self-service reset flow clears the
+        flag, so the account can then log in normally."""
+
+        if not redis_available:
+            pytest.skip("local Redis not reachable on localhost:6379")
+
+        user = await _make_user(db_session)
+        user.must_change_password = True
+        await db_session.commit()
+
+        # Confirm the account is blocked at login before the fix path runs.
+        blocked = client.post("/v1/auth/login", json={"email": user.email, "password": _CURRENT_PW})
+        assert blocked.status_code == 403
+
+        request_response = client.post("/v1/auth/password-reset", json={"email": user.email})
+        assert request_response.status_code == 202
+        raw_token = _extract_raw_token(str(fake_email_service.sent[0]["reset_link"]))
+
+        confirm_response = client.post(
+            "/v1/auth/password-reset/confirm",
+            json={"reset_token": raw_token, "new_password": _NEW_PW},
+        )
+        assert confirm_response.status_code == 204
+
+        await db_session.refresh(user)
+        assert user.must_change_password is False
+
+        login_response = client.post(
+            "/v1/auth/login", json={"email": user.email, "password": _NEW_PW}
+        )
+        assert login_response.status_code == 200
+        body = login_response.json()
+        assert body["access_token"]
+        assert body["refresh_token"]
+
 
 class TestPasswordChange:
     async def test_correct_password_changes_and_revokes_other_sessions_only(
@@ -576,3 +621,33 @@ class TestPasswordChange:
         )
 
         assert response.status_code == 401
+
+    async def test_change_password_clears_must_change_password_flag(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        redis_available: bool,
+    ) -> None:
+        """T42/ADR-0011: an authenticated session hitting `/password/change`
+        while `must_change_password` is set also clears the flag."""
+
+        if not redis_available:
+            pytest.skip("local Redis not reachable on localhost:6379")
+
+        user = await _make_user(db_session)
+        user.must_change_password = True
+        session = await _make_session(db_session, user)
+        await db_session.commit()
+        token = _bearer_token_for(user, session)
+
+        response = client.post(
+            "/v1/auth/password/change",
+            headers=_auth_header(token),
+            json={"current_password": _CURRENT_PW, "new_password": _NEW_PW},
+        )
+
+        assert response.status_code == 204
+
+        await db_session.refresh(user)
+        assert user.must_change_password is False
