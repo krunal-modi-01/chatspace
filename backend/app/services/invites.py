@@ -21,6 +21,13 @@ redemption path that lives here (mirroring `revoke_invite`'s shape); the
 rest of `POST /v1/auth/register` (user creation, duplicate/password
 validation, transaction boundary) lives in `app.api.auth` and
 `app.services.registration`.
+
+`list_invites` (T43) is the read side: a cursor-paginated, optionally
+`status`-filtered browse of every invite ever issued, reusing the T07
+keyset pagination utility over `(created_at, id)` for consistency with
+ADR-0003. It performs no mutation and, like every other function here,
+never selects or logs the raw token — only `Invite` rows (whose only
+persisted secret is `token_hash`) come back to the caller.
 """
 
 from __future__ import annotations
@@ -29,17 +36,24 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Literal, cast
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.ids import generate_id
+from app.core.pagination import CursorKey, Page, apply_keyset, paginate_rows
+
+if TYPE_CHECKING:
+    from sqlalchemy import ColumnElement
 from app.core.token_hash import hash_invite_token
 from app.models.invite import Invite, InviteStatus
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
+
+InviteListStatusFilter = Literal["pending", "accepted", "revoked", "expired"]
 
 # 256 bits of entropy, base64url-encoded — matches the construction already
 # used for refresh tokens (`app.services.sessions`) and reset tokens
@@ -196,3 +210,52 @@ def redeem_invite(invite: Invite, *, now: datetime | None = None) -> None:
     ts = now or datetime.now(UTC)
     invite.status = InviteStatus.ACCEPTED
     invite.accepted_at = ts
+
+
+async def list_invites(
+    db: AsyncSession,
+    *,
+    status_filter: InviteListStatusFilter | None = None,
+    limit: int,
+    cursor: CursorKey | None = None,
+    now: datetime | None = None,
+) -> Page[Invite]:
+    """Cursor-paginated, optionally `status`-filtered browse of all invites (T43).
+
+    `status_filter` narrows on the *wire* status, not the raw persisted
+    `InviteStatus` — `"expired"` is derived (`pending` AND `expires_at <=
+    now`) and `"pending"` on this filter means "pending and not yet
+    expired", matching `find_valid_invite_by_token`'s own definition of a
+    redeemable invite. `None` returns every invite regardless of status.
+
+    Ordered `(created_at, id)` DESC (most recently issued first) via the
+    T07 keyset utility; `limit` must already be resolved/clamped by the
+    caller (`app.core.pagination.resolve_limit`).
+    """
+
+    ts = now or datetime.now(UTC)
+    stmt = select(Invite)
+
+    if status_filter == "pending":
+        stmt = stmt.where(Invite.status == InviteStatus.PENDING, Invite.expires_at > ts)
+    elif status_filter == "expired":
+        stmt = stmt.where(Invite.status == InviteStatus.PENDING, Invite.expires_at <= ts)
+    elif status_filter == "accepted":
+        stmt = stmt.where(Invite.status == InviteStatus.ACCEPTED)
+    elif status_filter == "revoked":
+        stmt = stmt.where(Invite.status == InviteStatus.REVOKED)
+
+    stmt = apply_keyset(
+        stmt,
+        created_at_col=cast("ColumnElement[datetime]", Invite.created_at),
+        id_col=cast("ColumnElement[UUID]", Invite.id),
+        cursor=cursor,
+    ).limit(limit + 1)
+
+    result = await db.execute(stmt)
+    rows = list(result.scalars().all())
+    return paginate_rows(
+        rows,
+        limit=limit,
+        cursor_key=lambda invite: CursorKey(created_at=invite.created_at, id=invite.id),
+    )

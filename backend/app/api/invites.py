@@ -20,6 +20,12 @@ Four endpoints:
 - `DELETE /v1/invites/{id}` (Bearer, `system_admin` only): revokes an
   unused invite; idempotent (`204` even if already revoked), `409` if the
   invite was already redeemed (`accepted`).
+- `GET /v1/invites` (Bearer, `system_admin` only, T43): cursor-paginated
+  browse of every invite ever issued, optionally narrowed by
+  `?status=pending|accepted|revoked|expired`; returns
+  `{ items, next_cursor }` (empty list, not an error, when nothing
+  matches). Reuses the T07 keyset pagination utility over
+  `(created_at, id)` for consistency with ADR-0003.
 
 Every body is parsed via `app.core.request_body.parse_body` (not a typed
 FastAPI body parameter) so a malformed body maps to the contract's `400`
@@ -34,17 +40,20 @@ import logging
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.deps import AuthenticatedUser, require_system_admin
 from app.core.email_validation import is_valid_email_format
+from app.core.pagination import PaginationError, decode_cursor, resolve_limit
 from app.core.request_body import openapi_request_body, parse_body
 from app.db.session import get_db_session
 from app.models.invite import Invite, InviteStatus
 from app.schemas.invites import (
     InviteCreateRequest,
+    InviteListItem,
+    InviteListResponse,
     InviteResendRequest,
     InviteResendResponse,
     InviteResponse,
@@ -55,6 +64,7 @@ from app.services.invites import (
     create_invite,
     find_valid_invite_by_token,
     is_email_registered,
+    list_invites,
     revoke_invite,
     rotate_invite_token,
 )
@@ -70,12 +80,33 @@ _EMAIL_UNREACHABLE_DETAIL = "The invite email could not be delivered. Please try
 _NOT_FOUND_DETAIL = "No such invite."
 _NOT_PENDING_DETAIL = "Invite is not in a pending (resendable) state."
 _ALREADY_USED_DETAIL = "Invite has already been redeemed and cannot be revoked."
+_INVALID_STATUS_DETAIL = "status must be one of: pending, accepted, revoked, expired."
+
+_VALID_LIST_STATUS_FILTERS = {"pending", "accepted", "revoked", "expired"}
 
 _SystemAdmin = Annotated[AuthenticatedUser, Depends(require_system_admin)]
 _DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 _AppSettings = Annotated[Settings, Depends(get_settings)]
 _Email = Annotated[EmailService, Depends(get_email_service)]
 _Payload = Annotated[dict[str, Any], Body(...)]
+
+
+def _parse_list_limit(raw: str | None) -> int:
+    """Parse `limit`, raising `PaginationError` (-> frozen `400`) on failure.
+
+    Accepted as a raw string (not a typed FastAPI `int` query parameter)
+    for the same reason as `app.api.channels._parse_pagination`: FastAPI's
+    automatic coercion would raise its own `422` on a non-numeric value,
+    but the contract calls for `400` on any invalid pagination parameter.
+    """
+
+    if raw is None:
+        return resolve_limit(None)
+    try:
+        value = int(raw)
+    except ValueError:
+        raise PaginationError(field="limit", detail="limit must be a positive integer") from None
+    return resolve_limit(value)
 
 
 async def _get_invite_or_404(db: AsyncSession, invite_id: UUID) -> Invite:
@@ -206,6 +237,39 @@ async def resend_invite(
     )
 
     return InviteResendResponse.from_invite(invite)
+
+
+@router.get("", response_model=InviteListResponse, status_code=status.HTTP_200_OK)
+async def list_invites_route(
+    admin: _SystemAdmin,
+    db: _DbSession,
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    limit: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query()] = None,
+) -> InviteListResponse:
+    """`GET /v1/invites` (T43): paginated invite browse, admin-only.
+
+    Never logs (this route does not log at all — a read has nothing to
+    audit) and never selects the raw token; see `InviteListItem`.
+    """
+
+    if status_filter is not None and status_filter not in _VALID_LIST_STATUS_FILTERS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_INVALID_STATUS_DETAIL)
+
+    resolved_limit = _parse_list_limit(limit)
+    cursor_key = decode_cursor(cursor) if cursor else None
+
+    page = await list_invites(
+        db,
+        status_filter=status_filter,  # type: ignore[arg-type]
+        limit=resolved_limit,
+        cursor=cursor_key,
+    )
+
+    return InviteListResponse(
+        items=[InviteListItem.from_invite(invite) for invite in page.items],
+        next_cursor=page.next_cursor,
+    )
 
 
 @router.delete("/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)

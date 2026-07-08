@@ -1,9 +1,12 @@
 import type { JSX } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
+import { AdminRoute } from './components/AdminRoute';
 import { AppShell } from './components/AppShell';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { PublicOnlyRoute } from './components/PublicOnlyRoute';
 import { useSessionBootstrap } from './hooks/useSessionBootstrap';
+import { InvitesPage } from './pages/admin/InvitesPage';
+import { UsersPage } from './pages/admin/UsersPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -32,6 +35,11 @@ export function App(): JSX.Element {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/settings/password" element={<PasswordChangePage />} />
           <Route path="/settings/sessions" element={<SessionsPage />} />
+
+          <Route element={<AdminRoute />}>
+            <Route path="/admin/invites" element={<InvitesPage />} />
+            <Route path="/admin/users" element={<UsersPage />} />
+          </Route>
         </Route>
       </Route>
 

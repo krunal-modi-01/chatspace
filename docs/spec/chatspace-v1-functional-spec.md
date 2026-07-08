@@ -115,6 +115,8 @@ This specification defines the behavior of **chatspace v1**, a single-workspace,
 | F68 | R24 | Logs never contain raw message content, JWTs, invite tokens, reset tokens, secrets, or PII. | Any log output. | Log lines carry a correlation/request id but no sensitive data. |
 | F69 | R25 | Structured JSON logging plus uptime/error monitoring and latency instrumentation for the §7 delivery metric; security-relevant audit events (invite issuance/redemption, deactivation/reactivation, reset requests) are logged without content. | Runtime. | Observability signals emitted; audit events recorded without sensitive payloads. |
 | F70 | R41 | REST errors use RFC 7807 `application/problem+json` with standard statuses; WebSocket uses a documented close-code/reason scheme. | Any error response. | Errors returned in the standard shape with the correct status/close code. |
+| F71 | R54 | A System Admin can retrieve a paginated list of invites (email, status, expiry, issued_at), filterable by status (`pending`/`accepted`/`revoked`/`expired`); backs the Invite Management screen (PRD §11). | System Admin requesting the invite list. | List returned paginated with per-invite status; a non-admin caller → `403`; the raw invite token is never included (F68/R24). |
+| F72 | R55 | A System Admin can retrieve a paginated, searchable list of users (id, first/last name, username, email, role, `is_active`, `last_seen`); search matches name/username/email; includes active and deactivated users; backs the User Management screen (PRD §11). | System Admin requesting/searching the user list. | Matching users returned paginated; a non-admin caller → `403`; no password hash or other secret material in the response (§8). |
 
 ## 4. User flows
 
@@ -537,6 +539,12 @@ This specification defines the behavior of **chatspace v1**, a single-workspace,
 - Given any log output, Then it contains no raw message content, JWTs, invite/reset tokens, secrets, or PII, and carries a correlation id.
 - Given security-relevant events (invite issuance/redemption, deactivation/reactivation, reset requests), Then they are logged as audit events without sensitive payloads.
 - Given any error, Then REST responses use RFC 7807 `application/problem+json` with the correct status and WebSocket closes use the documented close-code scheme.
+
+**F71–F72 · Admin list/search (R54/R55)**
+- Given a System Admin requests the invite list, Then invites are returned paginated with email, status, expiry, and issued_at, filterable by status, and no raw token is included.
+- Given a System Admin searches users by name/username/email, Then matching users (active and deactivated) are returned paginated with id, name, username, email, role, `is_active`, and `last_seen`, and no password material.
+- Given a non-System-Admin requests the invite list or the user list, Then the request is rejected with `403`.
+- Given the invite or user list is empty, Then an empty, non-error result is returned.
 
 ## 9. Assumptions & dependencies
 
