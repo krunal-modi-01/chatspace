@@ -1,10 +1,10 @@
 # chatspace v1 — Task Breakdown
 
-> Ordered, dependency-aware decomposition of the [v1 technical spec](./chatspace-v1-technical-spec.md) into independently-buildable, PR-sized tasks. Honors the ten binding ADRs (`architecture/adr/0001`–`0010`) and the 1,000-user single-Postgres/single-Redis constraint from `CLAUDE.md`. No ADR is re-decided here.
+> Ordered, dependency-aware decomposition of the [v1 technical spec](./chatspace-v1-technical-spec.md) into independently-buildable, PR-sized tasks. Honors the binding ADRs (`architecture/adr/0001`–`0011`) and the 1,000-user single-Postgres/single-Redis constraint from `CLAUDE.md`. No ADR is re-decided here.
 
 ## Summary
 
-This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks across six milestones: **M0 Foundation** (skeleton, config, DB/Redis wiring, the initial schema migration, shared id/pagination utilities), **M1 Auth & Onboarding** (security primitives, revocable sessions, email, non-skippable admin bootstrap, invites, registration, login/reset), **M2 Core Domain** (profile, channels, membership + succession, admin deactivate, messages, DMs), **M3 Realtime** (WS connection manager, Redis persist-then-publish fan-out, presence, typing), **M4 Cross-cutting** (rate limiting, media pipeline + association), **M5 Frontend** (auth/channel/messaging/WS/presence/media UI + WCAG AA), and **M6 Ship** (docker-compose, CI, observability, Render deploy, load test + restore drill GA gate). The ordering honors persist-then-publish (T24 after message persistence), auth-before-join WS semantics, and the 1,000-user single-Postgres/single-Redis constraint. Backend and frontend tracks run largely in parallel against the frozen API contract.
+This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks across six milestones, plus a small M7 addenda milestone for gaps found post-implementation: **M0 Foundation** (skeleton, config, DB/Redis wiring, the initial schema migration, shared id/pagination utilities), **M1 Auth & Onboarding** (security primitives, revocable sessions, email, non-skippable admin bootstrap, invites, registration, login/reset), **M2 Core Domain** (profile, channels, membership + succession, admin deactivate, messages, DMs), **M3 Realtime** (WS connection manager, Redis persist-then-publish fan-out, presence, typing), **M4 Cross-cutting** (rate limiting, media pipeline + association), **M5 Frontend** (auth/channel/messaging/WS/presence/media UI + WCAG AA), **M6 Ship** (docker-compose, CI, observability, Render deploy, load test + restore drill GA gate), and **M7 Addenda** (T42: closes the `must_change_password` lockout discovered while exercising T30, per ADR-0011). The ordering honors persist-then-publish (T24 after message persistence), auth-before-join WS semantics, and the 1,000-user single-Postgres/single-Redis constraint. Backend and frontend tracks run largely in parallel against the frozen API contract.
 
 ## Milestone overview
 
@@ -17,6 +17,7 @@ This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks 
 | **M4 — Cross-cutting** | T27–T29 | backend | Rate limiting, media pipeline |
 | **M5 — Frontend** | T30–T36 | frontend, accessibility | Full SPA + WCAG 2.1 AA |
 | **M6 — Ship** | T37–T41 | infrastructure, devops, performance | Docker, CI, observability, deploy, GA validation |
+| **M7 — Addenda** | T42 | backend, frontend | Closes the `must_change_password` login lockout (ADR-0011) |
 
 Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff check` / `npm run lint`; **TYPE** = `mypy app` / `npm run typecheck`; **TEST** = `pytest` / `npm run test`; **SEC** = secret-scan hook passes + security-reviewer sign-off (invoked wherever auth/PII/secrets/tokens are touched).
 
@@ -457,6 +458,27 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 
 ---
 
+## M7 — Addenda (gaps found post-implementation)
+
+### T42 — Forced password-change unblock (must_change_password has no exit path)
+- **Phase / owner:** Addendum / `backend-engineer` (+ `frontend-engineer`, `security-reviewer`) · **Depends on:** T16, T30
+- **Context:** Discovered while exercising the shipped T30 login UI: a `must_change_password`-flagged account (today, only the env-seeded bootstrap admin, ADR-0009) is rejected at `POST /v1/auth/login` with `403 must-change-password` **before any session is issued**, and every password-setting endpoint except self-service reset requires a session. The account has no way to ever change its password. Root cause and decision recorded in **[ADR-0011](../../architecture/adr/0011-forced-password-change-unblock.md)** — this task implements that decision. Not a new capability; closes a gap in already-shipped T15/T16.
+- **Scope (in):**
+  - `backend/app/api/password.py::confirm_password_reset` — after `mark_reset_token_used`/setting `hashed_password`, also set `user.must_change_password = False` in the same transaction/commit.
+  - `backend/app/api/password.py::change_password` — same clear, for the (currently unreachable but foreseeable) case of an authenticated session hitting this endpoint while the flag is set.
+  - Frontend: when a `POST /v1/auth/login` response is a `403` with `type` ending in `/problems/must-change-password`, render a specific message + a CTA linking to `/password-reset` (the existing T30 `PasswordResetRequestPage`) instead of the generic 403 handling. No new page — reuses T30's reset flow end-to-end.
+- **Scope (out):** No new endpoint, no new JWT claim/scope, no change to `POST /v1/auth/login`'s blocking behavior (it must continue to issue zero session while the flag is set — that property is intentional, see ADR-0011 Option B/C rejection).
+- **Acceptance criteria:**
+  - [ ] A `must_change_password=true` user who completes `POST /v1/auth/password-reset` → `POST /v1/auth/password-reset/confirm` successfully can then log in normally (flag is `false` after confirm).
+  - [ ] `GET` on the user row after `password/change` succeeds while the flag was set (test seed) shows `must_change_password=false`.
+  - [ ] Login still returns `403 must-change-password` with **no** `access_token`/`refresh_token`/session row created, for a flagged account that has not yet reset — this must not regress.
+  - [ ] Frontend: hitting login with a flagged account shows a "reset your password to continue" message with a working link into the existing reset-request page; no dead end.
+  - [ ] LINT, TYPE, TEST (backend + frontend) pass; SEC re-review confirms clearing the flag on reset-confirm does not reopen the ADR-0009 threat model.
+  - [ ] Memory note `t15-must-enforce-must-change-password.md` updated to mark both open follow-ups resolved once merged.
+- **Refs:** ADR-0009, ADR-0011; `backend/app/services/auth.py` (`MustChangePasswordError`); `backend/app/core/errors.py` (`must_change_password_error_handler`); `backend/app/api/password.py`; T30 `PasswordResetRequestPage`/`usePasswordResetRequestForm`.
+
+---
+
 ## Parallelizable tracks
 
 - **Wave M0** — T01→T02→T03→T04 is a serial spine; **T05, T06, T07 run in parallel** once T01 lands; **T08 (frontend skeleton) is fully independent** and can start on day 1.
@@ -469,4 +491,6 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 
 **Critical path:** T01→T03→T04→T10→(T18→T19)→T21→T23→T24→T29→T41
 
-**Human 🔒 gates:** architecture sign-off already covers the design (TSD footer); additional 🔒 gates land at **T40** (prod/irreversible deploy config) and **T41** (GA go/no-go after load + restore drill). Every task touching auth/PII/secrets (T09, T10, T11, T12, T13, T14, T15, T16, T20, T27, T28) routes through the security-reviewer/secret-scan gate.
+**Human 🔒 gates:** architecture sign-off already covers the design (TSD footer); additional 🔒 gates land at **T40** (prod/irreversible deploy config) and **T41** (GA go/no-go after load + restore drill). Every task touching auth/PII/secrets (T09, T10, T11, T12, T13, T14, T15, T16, T20, T27, T28, T42) routes through the security-reviewer/secret-scan gate.
+
+**M7 addenda note:** T42 is not on the critical path and has no downstream dependents — it's a standalone fix for a gap found post-implementation (ADR-0011), safe to schedule whenever convenient once T16 and T30 are both merged.

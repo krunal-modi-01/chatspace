@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.ids import generate_id
 from app.core.security import hash_password
+from app.models.session import Session
 from app.models.user import User
 
 pytestmark = pytest.mark.usefixtures("configured_env")
@@ -173,6 +175,35 @@ class TestLoginEndpoint:
         assert body["status"] == 403
         assert "access_token" not in body
         assert "refresh_token" not in body
+
+    async def test_must_change_password_login_creates_no_session_row(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        redis_available: bool,
+    ) -> None:
+        """T42 regression: the 403 must-change-password block on login must
+        remain unchanged — no `sessions` row is ever created for a flagged,
+        not-yet-reset account, even with fully correct credentials."""
+
+        if not redis_available:
+            pytest.skip("local Redis not reachable on localhost:6379")
+
+        user = await _make_user(db_session, must_change_password=True)
+        await db_session.commit()
+
+        response = client.post(
+            "/v1/auth/login", json={"email": user.email, "password": _TEST_CREDENTIAL}
+        )
+
+        assert response.status_code == 403
+        body = response.json()
+        assert "access_token" not in body
+        assert "refresh_token" not in body
+
+        result = await db_session.execute(select(Session).where(Session.user_id == user.id))
+        assert result.scalars().all() == []
 
     async def test_malformed_body_is_400(
         self, migrated_db: None, client: TestClient, redis_available: bool
