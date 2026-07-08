@@ -17,6 +17,17 @@ Owns the transactional and query logic behind `/v1/channels*`:
 Does **not** implement the HTTP endpoints themselves, request-body
 parsing, or the `400`/`422`/`409` status-code mapping — see
 `app.api.channels` for that.
+
+`run_sole_admin_succession` implements the F36/F37 (R51) last-admin
+succession rule that T19 (membership mutation: join/leave/add/remove/role
+endpoints) was scoped to own. At the time this function was added (T44,
+System Admin deactivation), **T19 had not yet been implemented** — this
+module has no `leave_channel`/`remove_member` yet — so T44's deactivate
+flow is the first real caller. This function is written as the single
+shared primitive so that when T19 lands its own `POST /leave` and
+`DELETE /members/{user_id}` sole-admin paths, it reuses this exact
+function rather than re-deriving the same rule a second time. Flagged for
+the architect/api-reviewer to confirm alignment once T19 is scheduled.
 """
 
 from __future__ import annotations
@@ -173,3 +184,72 @@ async def list_public_channels(
     ]
 
     return PublicChannelPage(rows=rows, total=total)
+
+
+async def run_sole_admin_succession(db: AsyncSession, *, departing_user_id: UUID) -> list[UUID]:
+    """Promote a successor wherever `departing_user_id` is a channel's *sole* admin (F36/R51).
+
+    For every channel where `departing_user_id` currently holds the
+    `admin` role AND is the only admin of that channel, promotes the
+    remaining member with the earliest `joined_at` (any role, not just
+    `member`) to `admin` — matching F36 exactly ("the longest-standing
+    remaining member ... is automatically promoted to admin"). If no
+    other member remains, the channel is left with zero admins (F37, a
+    valid terminal state) — this function does not itself remove
+    `departing_user_id`'s membership row, since callers (deactivation
+    today; leave/remove-member once T19 lands) own that decision and its
+    timing independently.
+
+    Read via `ix_channel_members_admin_succession` (`(channel_id,
+    joined_at) WHERE role='admin'`) for the admin-count check; the
+    successor lookup itself scans all roles or a given channel, ordered
+    by `joined_at`, which the plain composite PK/`ix_channel_members_user`
+    indexes already serve at this scale.
+
+    Returns the ids of every channel where a promotion actually happened,
+    so the caller can log a content-free audit line without re-deriving
+    which channels changed. Flushes but does not commit — the caller owns
+    the transaction boundary (mirrors every other mutator in this module).
+    """
+
+    admin_channel_ids_result = await db.execute(
+        select(ChannelMember.channel_id).where(
+            ChannelMember.user_id == departing_user_id,
+            ChannelMember.role == ChannelMemberRole.ADMIN,
+        )
+    )
+    admin_channel_ids = [row[0] for row in admin_channel_ids_result.all()]
+
+    promoted_channel_ids: list[UUID] = []
+    for channel_id in admin_channel_ids:
+        admin_count_result = await db.execute(
+            select(func.count())
+            .select_from(ChannelMember)
+            .where(
+                ChannelMember.channel_id == channel_id,
+                ChannelMember.role == ChannelMemberRole.ADMIN,
+            )
+        )
+        if int(admin_count_result.scalar_one()) != 1:
+            continue  # not the sole admin — no succession needed
+
+        successor_result = await db.execute(
+            select(ChannelMember)
+            .where(
+                ChannelMember.channel_id == channel_id,
+                ChannelMember.user_id != departing_user_id,
+            )
+            .order_by(ChannelMember.joined_at.asc())
+            .limit(1)
+        )
+        successor = successor_result.scalar_one_or_none()
+        if successor is None:
+            continue  # F37: no other members — channel persists with zero admins
+
+        successor.role = ChannelMemberRole.ADMIN
+        promoted_channel_ids.append(channel_id)
+
+    if promoted_channel_ids:
+        await db.flush()
+
+    return promoted_channel_ids

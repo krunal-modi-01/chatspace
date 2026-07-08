@@ -73,6 +73,65 @@ describe('App route split', () => {
     expect(screen.getByRole('menuitem', { name: /sign out/i })).toBeInTheDocument();
   });
 
+  it('redirects a non-admin authenticated user away from an /admin route and shows no admin nav entry', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    useAuthStore.setState({
+      accessToken: FIXTURE_ACCESS,
+      refreshToken: FIXTURE_REFRESH,
+      user: {
+        id: 'user-1',
+        username: 'alice',
+        email: 'alice@co.com',
+        first_name: 'Alice',
+        last_name: 'Doe',
+        avatar_url: null,
+        role: 'user',
+        is_active: true,
+        last_seen: null,
+        created_at: '2026-07-02T14:31:07.482Z',
+      },
+      isBootstrapping: false,
+    });
+
+    renderAt('/admin/invites');
+
+    // Redirected to the dashboard, not the admin screen.
+    expect(await screen.findByRole('heading', { name: /welcome, alice/i })).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /alice/i }));
+    expect(screen.queryByRole('menuitem', { name: /admin/i })).not.toBeInTheDocument();
+  });
+
+  it('lets a System Admin reach /admin/invites and shows the Admin nav entry', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    useAuthStore.setState({
+      accessToken: FIXTURE_ACCESS,
+      refreshToken: FIXTURE_REFRESH,
+      user: {
+        id: 'user-1',
+        username: 'priya',
+        email: 'priya@co.com',
+        first_name: 'Priya',
+        last_name: 'Admin',
+        avatar_url: null,
+        role: 'system_admin',
+        is_active: true,
+        last_seen: null,
+        created_at: '2026-07-02T14:31:07.482Z',
+      },
+      isBootstrapping: false,
+    });
+
+    renderAt('/admin/invites');
+
+    expect(await screen.findByRole('heading', { name: /invite management/i })).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /priya/i }));
+    expect(screen.getByRole('menuitem', { name: /admin/i })).toBeInTheDocument();
+  });
+
   it('redirects an authenticated user away from /login', async () => {
     useAuthStore.setState({
       accessToken: FIXTURE_ACCESS,

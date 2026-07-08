@@ -13,15 +13,17 @@ T10 adds the `/v1/auth/sessions` list/revoke routes (session store +
 `/v1/auth/password-reset/confirm`, and `/v1/auth/password/change`
 (`app.api.password`). T17 adds `/v1/me` (own profile — `GET`/`PATCH`).
 T13 adds `/v1/invites*` (System Admin invite issuance/lifecycle,
-`app.api.invites`). T18 adds `/v1/channels*` (create/get/public browse,
-`app.api.channels`).
+`app.api.invites`, extended by T43 with the `GET /v1/invites` list read).
+T18 adds `/v1/channels*` (create/get/public browse, `app.api.channels`).
+T44 adds `/v1/admin/*` (System Admin user directory + deactivate/
+reactivate, `app.api.admin`).
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import auth, channels, health, invites, me, password, sessions
+from app.api import admin, auth, channels, health, invites, me, password, sessions
 
 api_router = APIRouter(prefix="/v1")
 api_router.include_router(health.router)
@@ -31,3 +33,4 @@ api_router.include_router(password.router)
 api_router.include_router(me.router)
 api_router.include_router(invites.router)
 api_router.include_router(channels.router)
+api_router.include_router(admin.router)

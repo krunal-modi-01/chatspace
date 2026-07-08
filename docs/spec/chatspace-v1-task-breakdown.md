@@ -4,7 +4,7 @@
 
 ## Summary
 
-This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks across six milestones, plus a small M7 addenda milestone for gaps found post-implementation: **M0 Foundation** (skeleton, config, DB/Redis wiring, the initial schema migration, shared id/pagination utilities), **M1 Auth & Onboarding** (security primitives, revocable sessions, email, non-skippable admin bootstrap, invites, registration, login/reset), **M2 Core Domain** (profile, channels, membership + succession, admin deactivate, messages, DMs), **M3 Realtime** (WS connection manager, Redis persist-then-publish fan-out, presence, typing), **M4 Cross-cutting** (rate limiting, media pipeline + association), **M5 Frontend** (auth/channel/messaging/WS/presence/media UI + WCAG AA), **M6 Ship** (docker-compose, CI, observability, Render deploy, load test + restore drill GA gate), and **M7 Addenda** (T42: closes the `must_change_password` lockout discovered while exercising T30, per ADR-0011). The ordering honors persist-then-publish (T24 after message persistence), auth-before-join WS semantics, and the 1,000-user single-Postgres/single-Redis constraint. Backend and frontend tracks run largely in parallel against the frozen API contract.
+This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks across six milestones, plus a small M7 addenda milestone for gaps found post-implementation: **M0 Foundation** (skeleton, config, DB/Redis wiring, the initial schema migration, shared id/pagination utilities), **M1 Auth & Onboarding** (security primitives, revocable sessions, email, non-skippable admin bootstrap, invites, registration, login/reset), **M2 Core Domain** (profile, channels, membership + succession, admin deactivate, messages, DMs), **M3 Realtime** (WS connection manager, Redis persist-then-publish fan-out, presence, typing), **M4 Cross-cutting** (rate limiting, media pipeline + association), **M5 Frontend** (auth/channel/messaging/WS/presence/media UI + WCAG AA), **M6 Ship** (docker-compose, CI, observability, Render deploy, load test + restore drill GA gate), **M7 Addenda** (T42: closes the `must_change_password` lockout discovered while exercising T30, per ADR-0011), and **M8 Admin surfaces** (T43–T47: the System Admin invite/user-management screens and their backing list endpoints, closing a frontend traceability gap where admin capabilities were specified only as backend behavior — PRD v2 §11, R54/R55, F71/F72; T44 also lands the T20 deactivate/reactivate endpoints). The ordering honors persist-then-publish (T24 after message persistence), auth-before-join WS semantics, and the 1,000-user single-Postgres/single-Redis constraint. Backend and frontend tracks run largely in parallel against the frozen API contract.
 
 ## Milestone overview
 
@@ -18,6 +18,7 @@ This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks 
 | **M5 — Frontend** | T30–T36 | frontend, accessibility | Full SPA + WCAG 2.1 AA |
 | **M6 — Ship** | T37–T41 | infrastructure, devops, performance | Docker, CI, observability, deploy, GA validation |
 | **M7 — Addenda** | T42 | backend, frontend | Closes the `must_change_password` login lockout (ADR-0011) |
+| **M8 — Admin surfaces** | T43–T47 | backend, frontend, accessibility | System Admin screens (invite + user management) + their backing list endpoints; closes the frontend traceability gap (PRD v2 §11, R54/R55, F71/F72) |
 
 Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff check` / `npm run lint`; **TYPE** = `mypy app` / `npm run typecheck`; **TEST** = `pytest` / `npm run test`; **SEC** = secret-scan hook passes + security-reviewer sign-off (invoked wherever auth/PII/secrets/tokens are touched).
 
@@ -479,6 +480,58 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 
 ---
 
+## M8 — Admin surfaces (gap found post-implementation)
+
+> **Context.** The System Admin's *capabilities* (invite issue/revoke/resend R45, deactivate/reactivate R47) shipped as backend endpoints (T13, and T20 as-specced), but the **screens** an admin uses to perform them were never scoped: PRD v1 §11 enumerated no admin screen inventory, so M5 (T30–T36) built none, and T30 only consumed the *invitee's* `GET /invites/{token}` redemption read. Two backing **reads** were also never specified — an admin cannot list outstanding invites or enumerate users. This milestone closes both, per **PRD v2 §11 / R54 / R55 / FS F71 / F72**. No ADR or DB schema change is required (listing uses existing `invites`/`users` tables; deactivation flips existing `users.is_active`).
+
+### T43 — List invites endpoint (`GET /v1/invites`, admin-only)
+- **Phase / owner:** Admin / `backend-engineer` (+ `security-reviewer`)
+- **Depends on:** T13
+- **Scope (in):** `GET /v1/invites` behind `require_system_admin`; optional `?status=pending|accepted|revoked|expired` filter; pagination (cursor over `(created_at, id)` reusing the T07 utility, for consistency with ADR-0003); returns `{ items: [{ id, email, status, expiry, issued_at }], next_cursor }`. New `list_invites` service in `app/services/invites.py`. Content-free logging (never the raw token — R24).
+- **Scope (out):** Any invite mutation (already T13); UI (T45).
+- **Acceptance criteria:**
+  - [ ] Admin caller → 200 with paginated invites; `status` filter narrows correctly; non-admin → 403.
+  - [ ] **Raw invite token never appears** in the response or logs; only `token_hash` persisted (unchanged from T13).
+  - [ ] Empty result → `{ items: [], next_cursor: null }` (not an error).
+  - [ ] LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** PRD R54; FS F71; API contract `/v1/invites`; ADR-0003.
+
+### T44 — Admin router: list users + deactivate/reactivate (`/v1/admin/*`)
+- **Phase / owner:** Admin / `backend-engineer` (+ `security-reviewer`)
+- **Depends on:** T15, T19, T10
+- **Scope (in):** New `app/api/admin.py` router (prefix `/admin`), mounted in `app/api/router.py`, all endpoints behind `require_system_admin`:
+  - `GET /v1/admin/users?q=&status=&limit=&cursor=` — paginated, searchable (name/username/email, case-insensitive), includes active + deactivated; returns `{ items: [{ id, first_name, last_name, username, email, role, is_active, last_seen }], next_cursor }`; **never** returns `hashed_password` (R55/F72).
+  - `POST /v1/admin/users/{id}/deactivate` — **this is where the never-built T20 lands**: set `is_active=false`, revoke all target sessions immediately (reuse T10 session store), run sole-admin channel succession where the target is a channel's only admin (reuse T19), reject deactivating the **last active System Admin** with `409` (F27), content-free audit event.
+  - `POST /v1/admin/users/{id}/reactivate` — set `is_active=true`; no prior sessions restored (F26); audit event.
+- **Scope (out):** WS mid-connection drop (delivered by T23 revalidation once sessions are revoked); UI (T46).
+- **Acceptance criteria:**
+  - [ ] `GET /admin/users` → 200 paginated; `q` matches name/username/email; deactivated users included; non-admin → 403; **no password material** in any row.
+  - [ ] Deactivate invalidates all target sessions + runs succession for each sole-admin channel (F25/F36); last System Admin → 409 (F27); reactivate restores login with a fresh session, prior sessions stay invalid (F26); prior messages/memberships intact (F28).
+  - [ ] LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** PRD R47/R55; FS F25–F28, F72, Flow D; ADR-0009; API contract `/v1/admin/users*`.
+
+### T45 — Frontend: admin route guard + nav + Invite Management screen
+- **Owner:** `frontend-engineer` · **Depends on:** T08, T43, T13
+- **Scope (in):** An `AdminRoute` guard (mirrors `ProtectedRoute`, additionally requiring `user.role === "system_admin"`, redirecting others); an admin route branch in `App.tsx` (`/admin/invites`); a conditional "Admin" nav entry in `UserMenu` shown only to System Admins; `adminApi` client methods `issueInvite`/`listInvites`/`resendInvite`/`revokeInvite` (+ types in `src/api/types.ts`); `pages/admin/InvitesPage.tsx` + `hooks/useInvites.ts` — issue form (inline email-format validation, pending state), list filterable by status, resend/revoke actions; surface `409` (already-registered) and `502` (email-unreachable) problem+json inline. Reuse existing `ui/` primitives + `httpClient` problem+json handling.
+- **Scope (out):** User management (T46); a11y finishing sweep (T47).
+- **Acceptance:** Admin sees the nav + screen and can issue/list/resend/revoke end-to-end; a non-admin is redirected from `/admin/*` and sees no nav entry; 409/502/410 states render clearly; no raw token rendered/logged; LINT/TYPE/TEST(frontend) + SEC pass.
+- **Refs:** PRD §11 (Invite Management), R45/R54; FS F1–F7, F71; API contract `/v1/invites*`.
+
+### T46 — Frontend: User Management screen
+- **Owner:** `frontend-engineer` · **Depends on:** T45, T44
+- **Scope (in):** `pages/admin/UsersPage.tsx` + `hooks/useAdminUsers.ts` at `/admin/users`; `adminApi` methods `listUsers`/`deactivateUser`/`reactivateUser` (+ types); searchable user list (name/username/email) showing role/active/last-seen; deactivate (with an explicit confirmation affordance) and reactivate actions; render the **last-active-admin `409`** as a clear inline message, not a generic failure. Reuses the T45 `AdminRoute`/nav.
+- **Scope (out):** a11y finishing sweep (T47).
+- **Acceptance:** Admin can list/search users and deactivate/reactivate; deactivation asks for confirmation; last-active-admin 409 renders the specific message; deactivated users remain visible in the list; LINT/TYPE/TEST pass.
+- **Refs:** PRD §11 (User Management), R47/R55; FS F25–F28, F72, Flow D; API contract `/v1/admin/users*`.
+
+### T47 — Accessibility pass over the admin screens (WCAG 2.1 AA)
+- **Owner:** `accessibility-auditor` (+ `frontend-engineer`) · **Depends on:** T45, T46
+- **Scope (in):** Keyboard nav across both admin screens; focus management on the invite-issue form and the deactivate-confirm affordance; ARIA on the invite/user lists (table semantics) and confirmation dialog; status/error announcements via a live region; contrast on status badges (pending/revoked, active/inactive).
+- **Acceptance:** Automated a11y checks pass; keyboard-only issue/resend/revoke and deactivate/reactivate flows verified; confirm-dialog focus trap + return-focus verified; LINT/TYPE/TEST pass.
+- **Refs:** FS §9 (WCAG 2.1 AA); PRD §11; mirrors T36.
+
+---
+
 ## Parallelizable tracks
 
 - **Wave M0** — T01→T02→T03→T04 is a serial spine; **T05, T06, T07 run in parallel** once T01 lands; **T08 (frontend skeleton) is fully independent** and can start on day 1.
@@ -488,9 +541,12 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 - **Wave M4** — **T27 and T28 are independent** (different subsystems) and parallel; T29 joins them after both.
 - **Frontend (M5)** runs as a **continuous parallel track** against the frozen API contract: T30 tracks M1, T31/T32 track M2, T33/T34 track M3, T35 tracks M4; T36 is a finishing sweep.
 - **Ship (M6)** — T37 can be built early (right after M0); T38 follows T37; **T39 and T40 parallel**; T41 is the final serial GA gate depending on the whole system.
+- **Wave M8** — **T43 and T44 run in parallel** (invite-list vs admin-users, different modules) once their deps (T13; T15/T19/T10) are met; frontend **T45 then T46** (T46 reuses T45's `AdminRoute`/nav/`adminApi`); T47 is a finishing a11y sweep after both screens. The whole milestone is off the critical path.
 
 **Critical path:** T01→T03→T04→T10→(T18→T19)→T21→T23→T24→T29→T41
 
-**Human 🔒 gates:** architecture sign-off already covers the design (TSD footer); additional 🔒 gates land at **T40** (prod/irreversible deploy config) and **T41** (GA go/no-go after load + restore drill). Every task touching auth/PII/secrets (T09, T10, T11, T12, T13, T14, T15, T16, T20, T27, T28, T42) routes through the security-reviewer/secret-scan gate.
+**Human 🔒 gates:** architecture sign-off already covers the design (TSD footer); additional 🔒 gates land at **T40** (prod/irreversible deploy config) and **T41** (GA go/no-go after load + restore drill). Every task touching auth/PII/secrets (T09, T10, T11, T12, T13, T14, T15, T16, T20, T27, T28, T42, T43, T44) routes through the security-reviewer/secret-scan gate.
 
 **M7 addenda note:** T42 is not on the critical path and has no downstream dependents — it's a standalone fix for a gap found post-implementation (ADR-0011), safe to schedule whenever convenient once T16 and T30 are both merged.
+
+**M8 addenda note:** T43–T47 close a frontend traceability gap found post-implementation (admin capabilities were specified only as backend behavior; the screens and their backing reads were never scoped — PRD v2 §11, R54/R55, F71/F72). Off the critical path, no downstream dependents. T44 also lands the deactivate/reactivate endpoints originally scoped as T20 (in `app/api/admin.py`). Schedulable once T13/T15/T19 are merged.

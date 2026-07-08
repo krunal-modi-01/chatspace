@@ -1,7 +1,14 @@
 # PRD — chatspace v1 (Final)
 
 > Owner: `product-manager` agent (+ human PM approval). Downstream: `business-analyst`, `architect`.
-> Status: Approved · Ticket: <link> · Last updated: 2026-07-02 · Version: 1
+> Status: Approved · Ticket: <link> · Last updated: 2026-07-08 · Version: 2
+
+> **v2 revision note.** Added the **System Admin screen inventory** (§11), the Priya→screen
+> mapping (§3), and two admin **read** requirements — **R54** (list invites) and **R55**
+> (list/search users) — that back those screens. This closes a frontend traceability gap:
+> v1 specified the System Admin *capabilities* (R45/R46/R47) only as backend behavior, so no
+> admin screens were ever scoped downstream. No capability is added or removed; this makes
+> the already-required admin operations reachable through the UI.
 
 ---
 
@@ -123,6 +130,9 @@ later if needed. Priya does **not** have any special power over channels or mess
 she cannot read private channels she's not a member of or delete other users' messages.
 A default System Admin account is created automatically at first deployment ("bootstrap
 admin") so the workspace is never in a state with zero admins and no way to invite anyone.
+Priya performs these tasks through two dedicated, role-gated admin screens — an **Invite
+Management** screen (issue, review, resend, revoke invites) and a **User Management** screen
+(review/search users, deactivate/reactivate accounts) — visible only to System Admins (§11).
 
 **Secondary — Workspace Operator ("Sam").** Self-hosts and runs the deployment (often
 also the bootstrap System Admin, but not necessarily the same person going forward).
@@ -270,6 +280,8 @@ with the product mostly through its operational and security guarantees.
 | R51 | **Last-admin succession** — when a channel's only admin leaves (R50) or is deactivated (R47), the system automatically promotes the **longest-standing remaining member** (earliest `joined_at`) to admin. If no other members remain, the channel persists with **zero admins** (not archived, not deleted) | Must (new) | A channel with zero admins cannot have its membership/roles changed until it regains an admin via this rule or via a future moderation feature. |
 | R52 | **Live propagation of edits/deletes** — when a message is edited or soft-deleted, all clients with an open WebSocket to that channel/DM receive an update event (not just new-message events) and update their view without a refresh | Must (new) | Same transport/fan-out as R15/R17; extends R9/R10. |
 | R53 | **EXIF metadata stripping** — uploaded images have EXIF metadata (including GPS location) stripped server-side before storage; the visual image content itself is not otherwise altered (not "processing" per the non-goals) | Must (new) | Applies to the image allowlist only (R31); does not apply to video or file attachments. |
+| R54 | **List invites (admin)** — a System Admin can retrieve a paginated list of invites (email, status, expiry, issued_at), filterable by status (`pending`/`accepted`/`revoked`/`expired`); backs the Invite Management screen (§11) | Must (new) | System-Admin only (non-admin → `403`). **Raw invite token never returned** (R24). Pagination per §5b. |
+| R55 | **List/search users (admin)** — a System Admin can retrieve a paginated, searchable list of users (id, first/last name, username, email, role, `is_active`, `last_seen`); search matches name/username/email; backs the User Management screen (§11) | Must (new) | System-Admin only (non-admin → `403`). **Password hash never returned** (§8). Pagination per §5b; includes both active and deactivated users. |
 
 ### §5a — Configurable limits (defaults; confirm/tune during design — not open product questions)
 
@@ -345,6 +357,12 @@ with the product mostly through its operational and security guarantees.
 - Given a System Admin reactivates a deactivated user, Then that user can log in again (fresh session; prior sessions are not restored).
 - Given a deactivated user's prior messages and channel memberships, Then they remain visible/intact (not deleted or anonymized).
 - Given a System Admin attempts to deactivate the **last remaining active System Admin**, Then the action is rejected with a clear error (the workspace must always retain ≥1 active System Admin).
+
+**R54 / R55 — Admin list/search (screen-backing reads)**
+- Given a System Admin requests the invite list, Then invites are returned with email, status, expiry, and issued_at, paginated, filterable by status, and **no raw token is ever included**.
+- Given a non-System-Admin requests the invite list or the user list, Then the request is rejected with `403`.
+- Given a System Admin searches users by name, username, or email, Then matching users — **both active and deactivated** — are returned paginated, each with id, name, username, email, role, `is_active`, and `last_seen`, and **no password material**.
+- Given the user or invite list is empty, Then an empty, non-error result is returned (rendered as the §11 empty state).
 
 **R2 / R3 / R35 — Login, tokens, authenticated access**
 - Given valid credentials for an **active** account, When a user logs in, Then a short-lived access token and a refresh token are returned.
@@ -540,6 +558,27 @@ complexity. Re-evaluate via ADR when real usage data warrants it.
 - **Validation messages:** inline for registration, password change/reset, channel creation, message length, invite email format.
 - **Accessibility.** Target **WCAG 2.1 AA** (keyboard nav, focus management on new/live-updated messages, ARIA live-region for incoming messages/typing/edits/deletes, contrast, alt text). *(Default — confirm with PM/UX if a different bar is required.)*
 - **Timezones.** Server stores UTC; client renders local/relative time.
+
+**System Admin screens (role-gated; visible only to a System Admin).** Two dedicated screens
+give Priya (§3) the UI to perform the already-required admin capabilities (R45/R47) and the
+reads that back them (R54/R55). Both are reachable only when the authenticated user's role is
+System Admin; a non-admin who navigates to them is redirected (no admin nav entry is shown).
+
+- **Invite Management** (R45/R54) — issue an invite (single email input, inline
+  **email-format validation**), and a list of invites filterable by status
+  (`pending`/`accepted`/`revoked`/`expired`) with **resend** and **revoke** actions on pending
+  invites. States: *empty* — "no invites issued yet"; *loading* — list fetch + per-invite
+  "invite send pending"; *error* — `409` already-registered email ("this email already has an
+  account"), `502` email-unreachable ("invite couldn't be delivered — try again"), `410`/`409`
+  on resend/revoke of a non-pending invite ("this invite is no longer pending"). The raw invite
+  token is never shown (R24).
+- **User Management** (R47/R55) — a searchable list of workspace users (name, username, email,
+  role, active/inactive, last-seen) with **deactivate** (active users) and **reactivate**
+  (deactivated users) actions. States: *empty* — "no users found" (search) / edge-case "no
+  users yet"; *loading* — list/search fetch; *confirm* — deactivation requires an explicit
+  confirmation affordance (it drops the target's sessions immediately, R47); *error* — the
+  **last active System Admin cannot be deactivated** surfaces the `409` as a clear inline
+  message ("the workspace must keep at least one active admin"), not a generic failure.
 
 ## 12. Handoff to Design / ADR (open decisions — NOT resolved here)
 

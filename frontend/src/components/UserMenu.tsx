@@ -43,6 +43,7 @@ export function UserMenu(): JSX.Element {
   }, [isOpen]);
 
   const initial = (user?.username ?? '?').slice(0, 1).toUpperCase();
+  const isSystemAdmin = user?.role === 'system_admin';
 
   return (
     <div className="relative" ref={containerRef}>
@@ -93,6 +94,19 @@ export function UserMenu(): JSX.Element {
           >
             Sessions
           </Link>
+          {isSystemAdmin && (
+            <>
+              <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
+              <Link
+                role="menuitem"
+                to="/admin/invites"
+                onClick={() => setIsOpen(false)}
+                className={MENU_ITEM_CLASSES}
+              >
+                Admin
+              </Link>
+            </>
+          )}
           <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
           <button
             role="menuitem"

@@ -129,3 +129,59 @@ export interface OffsetPage<T> {
   limit: number;
   offset: number;
 }
+
+// ---------------------------------------------------------------------------
+// Admin surfaces (T45/T46) — invite management + user management.
+// ---------------------------------------------------------------------------
+
+export type InviteStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
+
+export interface IssueInviteRequest {
+  email: string;
+}
+
+/** `200`/`201` body of issue/resend — the raw token is never included
+ * (server persists only `token_hash`, R24). */
+export interface Invite {
+  id: string;
+  email: string;
+  status: InviteStatus;
+  expiry: string;
+}
+
+/** Row shape returned by `GET /v1/invites` — adds `issued_at`. */
+export interface InviteListItem extends Invite {
+  issued_at: string;
+}
+
+export interface ListInvitesParams {
+  status?: InviteStatus;
+  limit?: number;
+  cursor?: string;
+}
+
+/** Row shape returned by `GET /v1/admin/users` — never includes
+ * `hashed_password` or any password material. */
+export interface AdminUser {
+  id: string;
+  first_name: string;
+  last_name: string;
+  username: string;
+  email: string;
+  role: UserRole;
+  is_active: boolean;
+  last_seen: string | null;
+}
+
+export interface ListAdminUsersParams {
+  q?: string;
+  status?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+/** `200` body of deactivate/reactivate. */
+export interface AdminUserActivationResponse {
+  id: string;
+  is_active: boolean;
+}
