@@ -1,5 +1,6 @@
 import type { JSX } from 'react';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { Card } from '../components/ui/Card';
 import { useSessions } from '../hooks/useSessions';
 
 const FALLBACK_DEVICE_LABEL = 'Unknown device';
@@ -11,33 +12,33 @@ export function SessionsPage(): JSX.Element {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <h1 className="text-xl font-semibold text-gray-900">Active sessions</h1>
+      <h1 className="text-heading text-[var(--color-text-primary)]">Active sessions</h1>
 
       {error !== null && <ErrorBanner error={error} />}
 
       {isLoading ? (
-        <div role="status" aria-live="polite" className="text-sm text-gray-500">
+        <div role="status" aria-live="polite" className="text-body text-[var(--color-text-secondary)]">
           Loading sessions…
         </div>
       ) : sessions.length === 0 ? (
-        <p className="text-sm text-gray-600">No active sessions found.</p>
+        <Card className="text-body text-[var(--color-text-secondary)]">No active sessions found.</Card>
       ) : (
-        <ul className="divide-y divide-gray-200 rounded-md border border-gray-200">
+        <ul className="divide-y divide-[var(--color-border)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-overlay)]">
           {sessions.map((session) => (
             <li
               key={session.session_id}
               className="flex items-center justify-between gap-4 px-4 py-3"
             >
               <div>
-                <p className="text-sm font-medium text-gray-900">
+                <p className="text-body font-medium text-[var(--color-text-primary)]">
                   {session.device_label ?? FALLBACK_DEVICE_LABEL}
                   {session.current && (
-                    <span className="ml-2 rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-700">
+                    <span className="ml-2 rounded-full bg-[var(--color-accent)]/10 px-2 py-0.5 text-caption font-semibold text-[var(--color-accent)]">
                       This device
                     </span>
                   )}
                 </p>
-                <p className="text-xs text-gray-500">
+                <p className="text-caption text-[var(--color-text-tertiary)]">
                   Signed in {new Date(session.created_at).toLocaleString()}
                   {session.last_seen_at &&
                     ` · Last active ${new Date(session.last_seen_at).toLocaleString()}`}
@@ -48,7 +49,7 @@ export function SessionsPage(): JSX.Element {
                   type="button"
                   onClick={() => revoke(session.session_id)}
                   disabled={revokingId === session.session_id}
-                  className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-body font-medium text-[var(--color-text-primary)] transition-colors duration-150 ease-out hover:bg-[var(--color-surface-raised)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {revokingId === session.session_id ? 'Revoking…' : 'Revoke'}
                 </button>

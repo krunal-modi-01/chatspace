@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -65,7 +66,11 @@ describe('App route split', () => {
     renderAt('/');
 
     expect(await screen.findByRole('heading', { name: /welcome, alice/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument();
+
+    // "Sign out" lives behind the account menu now (consolidated nav).
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /alice/i }));
+    expect(screen.getByRole('menuitem', { name: /sign out/i })).toBeInTheDocument();
   });
 
   it('redirects an authenticated user away from /login', async () => {

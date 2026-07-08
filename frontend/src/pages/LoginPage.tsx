@@ -1,6 +1,11 @@
 import type { JSX } from 'react';
 import { Link } from 'react-router-dom';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { AlertBanner } from '../components/ui/AlertBanner';
+import { AuroraBackground } from '../components/ui/AuroraBackground';
+import { Button } from '../components/ui/Button';
+import { Card } from '../components/ui/Card';
+import { FormField } from '../components/ui/FormField';
 import { isMustChangePasswordError, useLoginForm } from '../hooks/useLoginForm';
 
 /** Login screen wiring the typed API client + auth store. Non-happy states
@@ -13,85 +18,76 @@ export function LoginPage(): JSX.Element {
   const mustChangePassword = isMustChangePasswordError(error);
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <h1 className="text-center text-2xl font-semibold text-gray-900">Sign in to chatspace</h1>
+    <AuroraBackground>
+      <div className="flex min-h-screen items-center justify-center px-4">
+        <div className="w-full max-w-sm space-y-6">
+          <h1 className="text-center text-display text-[var(--color-text-primary)]">
+            Sign in to chatspace
+          </h1>
 
-        {error !== null && mustChangePassword && (
-          <div
-            role="alert"
-            className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"
-          >
-            <p className="font-medium">Your password must be changed before you can log in.</p>
-            <p>
-              <Link to="/password-reset" className="font-medium text-indigo-600 hover:text-indigo-500">
-                Reset your password
-              </Link>{' '}
-              to continue.
-            </p>
-          </div>
-        )}
-        {error !== null && !mustChangePassword && <ErrorBanner error={error} />}
+          {error !== null && mustChangePassword && (
+            <AlertBanner variant="warning" title="Your password must be changed before you can log in.">
+              <p>
+                <Link
+                  to="/password-reset"
+                  className="font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]"
+                >
+                  Reset your password
+                </Link>{' '}
+                to continue.
+              </p>
+            </AlertBanner>
+          )}
+          {error !== null && !mustChangePassword && <ErrorBanner error={error} />}
 
-        <form className="space-y-4" onSubmit={submit} noValidate>
-          <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-              Email
-            </label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
+          <Card>
+            <form className="space-y-4" onSubmit={submit} noValidate>
+              <FormField
+                id="email"
+                name="email"
+                label="Email"
+                type="email"
+                autoComplete="email"
+                required
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
 
-          <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-              Password
-            </label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
+              <FormField
+                id="password"
+                name="password"
+                label="Password"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
 
-          <div className="text-right">
-            <Link
-              to="/password-reset"
-              className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
-            >
-              Forgot password?
+              <div className="text-right">
+                <Link
+                  to="/password-reset"
+                  className="text-body font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+
+              <Button type="submit" isLoading={isSubmitting} loadingText="Signing in…">
+                Sign in
+              </Button>
+            </form>
+          </Card>
+
+          <p className="text-center text-body text-[var(--color-text-secondary)]">
+            Need an account? Use your invite link to{' '}
+            <Link to="/register" className="font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]">
+              register
             </Link>
-          </div>
-
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
-          >
-            {isSubmitting ? 'Signing in…' : 'Sign in'}
-          </button>
-        </form>
-
-        <p className="text-center text-sm text-gray-500">
-          Need an account? Use your invite link to{' '}
-          <Link to="/register" className="font-medium text-indigo-600 hover:text-indigo-500">
-            register
-          </Link>
-          .
-        </p>
+            .
+          </p>
+        </div>
       </div>
-    </div>
+    </AuroraBackground>
   );
 }
