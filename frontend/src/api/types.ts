@@ -66,6 +66,44 @@ export interface RegisterRequest {
   avatar_url?: string | null;
 }
 
+/** `200` body of `GET /v1/invites/{token}` — used to pre-fill and lock the
+ * registration email. */
+export interface InviteTokenValidation {
+  email: string;
+  expiry: string;
+}
+
+export interface PasswordResetRequest {
+  email: string;
+}
+
+/** `202` uniform envelope — identical whether or not the email exists. */
+export interface PasswordResetAcceptedResponse {
+  message: string;
+}
+
+export interface PasswordResetConfirmRequest {
+  reset_token: string;
+  new_password: string;
+}
+
+export interface PasswordChangeRequest {
+  current_password: string;
+  new_password: string;
+}
+
+export interface SessionSummary {
+  session_id: string;
+  created_at: string;
+  last_seen_at: string | null;
+  device_label: string | null;
+  current: boolean;
+}
+
+export interface SessionListResponse {
+  items: SessionSummary[];
+}
+
 /** RFC 7807 `application/problem+json` error body. */
 export interface ProblemDetails {
   type: string;

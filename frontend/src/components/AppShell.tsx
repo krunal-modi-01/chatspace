@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Link, Outlet } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useLogout } from '../hooks/useLogout';
 
@@ -14,6 +14,18 @@ export function AppShell(): JSX.Element {
       <header className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
         <span className="text-lg font-semibold text-gray-900">chatspace</span>
         <div className="flex items-center gap-3">
+          <Link
+            to="/settings/password"
+            className="text-sm font-medium text-gray-600 hover:text-gray-900"
+          >
+            Change password
+          </Link>
+          <Link
+            to="/settings/sessions"
+            className="text-sm font-medium text-gray-600 hover:text-gray-900"
+          >
+            Sessions
+          </Link>
           {user && <span className="text-sm text-gray-600">{user.username}</span>}
           <button
             type="button"
