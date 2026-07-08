@@ -18,3 +18,4 @@ The Technical Specification that these ADRs support: [`docs/spec/chatspace-v1-te
 | [ADR-0008](0008-deployment-target.md) | Deployment target — managed PaaS (recommend Render) | Proposed | 2026-07-02 |
 | [ADR-0009](0009-system-admin-bootstrap.md) | System Admin bootstrap — env-seeded at startup | Proposed | 2026-07-02 |
 | [ADR-0010](0010-transactional-email.md) | Transactional email — provider-agnostic SMTP abstraction, fail-loud, no queue | Proposed | 2026-07-02 |
+| [ADR-0011](0011-forced-password-change-unblock.md) | Forced password-change unblock — reuse self-service reset (amends ADR-0009) | Proposed | 2026-07-08 |

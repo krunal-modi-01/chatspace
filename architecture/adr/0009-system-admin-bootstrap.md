@@ -34,3 +34,6 @@ We will **seed the bootstrap System Admin from environment variables at applicat
 
 ## Compliance / reversibility
 Reversible and low-cost to change: the seed routine is isolated startup logic. Once at least one admin exists it never runs again, so switching to a different first-admin mechanism later is inconsequential. Security-sensitive (creates a privileged account and handles an initial secret), so it is in scope for `security-reviewer` at the 🔒 gate. No external regulatory implication.
+
+## Amendments
+- **[ADR-0011](0011-forced-password-change-unblock.md)** (2026-07-08): this ADR's "prompted to rotate it on first login" line never specified *how* — T15 implemented only the block (`403` at login, no session issued), leaving no path to actually change the password. ADR-0011 decides that mechanism (reuse the T16 self-service password-reset flow) without changing this ADR's bootstrap decision.
