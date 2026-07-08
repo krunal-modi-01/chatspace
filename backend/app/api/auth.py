@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.deps import AuthenticatedUser, require_auth
 from app.core.password_policy import enforce_password_policy
+from app.core.request_body import openapi_request_body
 from app.db.redis import get_redis_client
 from app.db.session import get_db_session
 from app.schemas.auth import LoginRequest, LoginResponse, RefreshRequest, RefreshResponse
@@ -131,7 +132,13 @@ async def _parse_body[T: BaseModel](request: Request, model: type[T]) -> T:
         ) from None
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post(
+    "/login",
+    response_model=LoginResponse,
+    openapi_extra=openapi_request_body(
+        LoginRequest, {"email": "alice@co.com", "password": "<password>"}
+    ),
+)
 async def login(request: Request, db: _DbSession, settings: _SettingsDep) -> LoginResponse:
     """Authenticate and issue a new session (F10).
 
@@ -179,7 +186,11 @@ async def login(request: Request, db: _DbSession, settings: _SettingsDep) -> Log
     )
 
 
-@router.post("/refresh", response_model=RefreshResponse)
+@router.post(
+    "/refresh",
+    response_model=RefreshResponse,
+    openapi_extra=openapi_request_body(RefreshRequest, {"refresh_token": "<refresh_token>"}),
+)
 async def refresh(request: Request, db: _DbSession, settings: _SettingsDep) -> RefreshResponse:
     """Exchange a refresh token for a fresh access token, rotating it (F12).
 
@@ -234,7 +245,22 @@ async def logout(current: _CurrentUser, db: _DbSession) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/register", response_model=RegisteredUser, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=RegisteredUser,
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra=openapi_request_body(
+        RegisterRequest,
+        {
+            "invite_token": "<invite_token>",
+            "username": "alice",
+            "first_name": "Alice",
+            "last_name": "Ng",
+            "password": "<password>",
+            "avatar_url": None,
+        },
+    ),
+)
 async def register(request: Request, db: _DbSession) -> RegisteredUser:
     """Redeem a pending, unexpired invite and create the invited user (F5/F6).
 

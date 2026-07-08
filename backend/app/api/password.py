@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.deps import AuthenticatedUser, require_auth
 from app.core.password_policy import enforce_password_policy
-from app.core.request_body import parse_body
+from app.core.request_body import openapi_request_body, parse_body
 from app.core.security import hash_password, verify_password
 from app.db.redis import get_redis_client
 from app.db.session import get_db_session, get_sessionmaker
@@ -179,6 +179,7 @@ async def _process_password_reset_request(
     "/password-reset",
     response_model=PasswordResetAcceptedResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    openapi_extra=openapi_request_body(PasswordResetRequest, {"email": "alice@co.com"}),
 )
 async def request_password_reset(
     payload: _Payload,
@@ -208,7 +209,14 @@ async def request_password_reset(
     return PasswordResetAcceptedResponse(message=_UNIFORM_RESET_MESSAGE)
 
 
-@router.post("/password-reset/confirm", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/password-reset/confirm",
+    status_code=status.HTTP_204_NO_CONTENT,
+    openapi_extra=openapi_request_body(
+        PasswordResetConfirmRequest,
+        {"reset_token": "<reset_token>", "new_password": "<new_password>"},
+    ),
+)
 async def confirm_password_reset(payload: _Payload, db: _DbSession) -> Response:
     body = parse_body(PasswordResetConfirmRequest, payload)
 
@@ -251,7 +259,14 @@ async def confirm_password_reset(payload: _Payload, db: _DbSession) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/password/change", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/password/change",
+    status_code=status.HTTP_204_NO_CONTENT,
+    openapi_extra=openapi_request_body(
+        PasswordChangeRequest,
+        {"current_password": "<current_password>", "new_password": "<new_password>"},
+    ),
+)
 async def change_password(payload: _Payload, current: _CurrentUser, db: _DbSession) -> Response:
     body = parse_body(PasswordChangeRequest, payload)
 
