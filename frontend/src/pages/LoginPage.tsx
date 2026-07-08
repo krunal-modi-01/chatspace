@@ -3,10 +3,9 @@ import { Link } from 'react-router-dom';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { useLoginForm } from '../hooks/useLoginForm';
 
-/** Minimal login screen wiring the typed API client + auth store. Full
- * auth UX (invite registration, password reset, device management) is
- * built out in T30 — this only proves the skeleton's public/protected
- * split and 401/refresh-capable client work end to end. */
+/** Login screen wiring the typed API client + auth store. Non-happy states
+ * (invalid credentials, deactivated account, must-change-password) surface
+ * via the shared `ErrorBanner`/problem+json pattern in `useLoginForm`. */
 export function LoginPage(): JSX.Element {
   const { email, setEmail, password, setPassword, error, isSubmitting, submit } = useLoginForm();
 
@@ -48,6 +47,15 @@ export function LoginPage(): JSX.Element {
               onChange={(event) => setPassword(event.target.value)}
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
+          </div>
+
+          <div className="text-right">
+            <Link
+              to="/password-reset"
+              className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
+            >
+              Forgot password?
+            </Link>
           </div>
 
           <button
