@@ -40,11 +40,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.deps import AuthenticatedUser, require_system_admin
 from app.core.email_validation import is_valid_email_format
-from app.core.request_body import parse_body
+from app.core.request_body import openapi_request_body, parse_body
 from app.db.session import get_db_session
 from app.models.invite import Invite, InviteStatus
 from app.schemas.invites import (
     InviteCreateRequest,
+    InviteResendRequest,
     InviteResendResponse,
     InviteResponse,
     InviteTokenValidationResponse,
@@ -84,7 +85,12 @@ async def _get_invite_or_404(db: AsyncSession, invite_id: UUID) -> Invite:
     return invite
 
 
-@router.post("", response_model=InviteResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=InviteResponse,
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra=openapi_request_body(InviteCreateRequest, {"email": "bob@co.com"}),
+)
 async def issue_invite(
     payload: _Payload,
     admin: _SystemAdmin,
@@ -154,6 +160,7 @@ async def validate_invite_token(token: str, db: _DbSession) -> InviteTokenValida
     "/{invite_id}/resend",
     response_model=InviteResendResponse,
     status_code=status.HTTP_200_OK,
+    openapi_extra=openapi_request_body(InviteResendRequest, {}),
 )
 async def resend_invite(
     invite_id: UUID,

@@ -45,4 +45,5 @@ Pre-merge checklist for the `api-design` skill. Every box should be a deliberate
 ## Spec & tests
 - [ ] Machine-readable spec (OpenAPI) is the source of truth and updated.
 - [ ] Examples for non-obvious requests and each error case.
+- [ ] Every write endpoint (`POST`/`PUT`/`PATCH`) with a body shows that body's **schema + example in the generated spec** — check the generated spec, not just the handler. If the handler validates the body manually (bypassing typed-body binding to control `400`-vs-`422`), attach the schema explicitly (FastAPI: `openapi_extra=` from the same model) — otherwise the spec shows an empty/untyped body while validation silently happens.
 - [ ] Contract tests cover the new/changed behavior.

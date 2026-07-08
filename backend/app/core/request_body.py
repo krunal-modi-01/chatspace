@@ -60,3 +60,30 @@ def parse_body[ModelT: BaseModel](model: type[ModelT], raw: dict[str, Any]) -> M
             for error in exc.errors()
         ]
         raise MalformedBodyError(errors) from exc
+
+
+def openapi_request_body(
+    model: type[BaseModel], example: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Build a route `openapi_extra` block documenting a manually-parsed body.
+
+    The routes in this package never declare their request body as a typed
+    FastAPI parameter (see module docstring), so FastAPI cannot infer the
+    request schema for the generated OpenAPI document: an untyped
+    `dict[str, Any]` body renders as a bare `object` with no fields, and a
+    `Request`-parsed body renders as no body at all — which reads as
+    "unvalidated" even though `parse_body` validates every field. This
+    reconstructs the `requestBody` block from the **same** Pydantic model
+    the route validates against, so the published schema can never drift
+    from the model actually enforced.
+
+    Pass the result as `@router.post(..., openapi_extra=...)`. It is a
+    documentation-only concern: it changes the generated OpenAPI schema, not
+    the runtime parse path, so the frozen `400`-vs-`422` status semantics
+    are untouched.
+    """
+
+    content: dict[str, Any] = {"schema": model.model_json_schema()}
+    if example is not None:
+        content["example"] = example
+    return {"requestBody": {"required": True, "content": {"application/json": content}}}
