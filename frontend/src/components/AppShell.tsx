@@ -1,40 +1,20 @@
 import type { JSX } from 'react';
-import { Link, Outlet } from 'react-router-dom';
-import { useAuth } from '../hooks/useAuth';
-import { useLogout } from '../hooks/useLogout';
+import { Outlet } from 'react-router-dom';
+import { ThemeToggle } from './ui/ThemeToggle';
+import { UserMenu } from './UserMenu';
 
-/** Top-level authenticated shell: header with current user + logout, and
- * a content outlet for feature screens added in T30+. */
+/** Top-level authenticated shell: brand + theme toggle + account menu in the
+ * header, and a content outlet for feature screens added in T30+. Stays a
+ * flat, neutral surface per architecture/design-tokens.md §1 — no ambient
+ * background here, only the elevation treatment from §6. */
 export function AppShell(): JSX.Element {
-  const { user } = useAuth();
-  const { logoutAndRedirect, isLoggingOut } = useLogout();
-
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-        <span className="text-lg font-semibold text-gray-900">chatspace</span>
-        <div className="flex items-center gap-3">
-          <Link
-            to="/settings/password"
-            className="text-sm font-medium text-gray-600 hover:text-gray-900"
-          >
-            Change password
-          </Link>
-          <Link
-            to="/settings/sessions"
-            className="text-sm font-medium text-gray-600 hover:text-gray-900"
-          >
-            Sessions
-          </Link>
-          {user && <span className="text-sm text-gray-600">{user.username}</span>}
-          <button
-            type="button"
-            onClick={logoutAndRedirect}
-            disabled={isLoggingOut}
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            {isLoggingOut ? 'Signing out…' : 'Sign out'}
-          </button>
+    <div className="flex min-h-screen flex-col bg-[var(--color-surface)]">
+      <header className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-raised)] px-4 py-3">
+        <span className="text-subheading text-[var(--color-text-primary)]">chatspace</span>
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <UserMenu />
         </div>
       </header>
       <main className="flex-1 px-4 py-6">

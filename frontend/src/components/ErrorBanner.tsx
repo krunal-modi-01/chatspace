@@ -1,6 +1,7 @@
 import type { JSX } from 'react';
 import { env } from '../config/env';
 import { ApiError } from '../api/problem';
+import { AlertBanner } from './ui/AlertBanner';
 
 export interface ErrorBannerProps {
   error: unknown;
@@ -27,15 +28,11 @@ export function ErrorBanner({ error }: ErrorBannerProps): JSX.Element {
   const { title, detail, correlationId } = toMessage(error);
 
   return (
-    <div
-      role="alert"
-      className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800"
-    >
-      <p className="font-medium">{title}</p>
+    <AlertBanner variant="error" role="alert" title={title}>
       <p>{detail}</p>
       {env.isDev && correlationId && (
         <p className="mt-1 font-mono text-xs text-red-600">correlation_id: {correlationId}</p>
       )}
-    </div>
+    </AlertBanner>
   );
 }

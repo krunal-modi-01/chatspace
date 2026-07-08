@@ -531,6 +531,8 @@ complexity. Re-evaluate via ADR when real usage data warrants it.
 
 **Fault tolerance / DR.** Redis loss degrades real-time/presence/rate-limit but not history. Daily backups; restore drill before GA. **New:** if the email provider is unreachable, invite/reset requests must fail loudly (clear error to the System Admin / user) rather than silently dropping — do not queue-and-forget without a retry/alerting story.
 
+**Visual tone / reference product.** Premium, minimal, and information-dense in the working app — closer to Linear/Raycast than a marketing site — with a distinctive ambient identity on low-density auth/onboarding surfaces (soft gradient/noise atmosphere), not decorative chrome throughout. No illustration/imagery beyond avatars. **Light and dark themes are both in scope** (system-preference default, user-toggleable, persisted) — supersedes the earlier "light mode only" note now that dark mode is explicitly directed. Full palette, type/spacing scale, elevation, motion tokens, and component states are defined in [`architecture/design-tokens.md`](../../architecture/design-tokens.md) — `frontend-engineer` must treat that file as a required input alongside this PRD, not optional polish.
+
 **UX states (responsive web; native mobile client remains a non-goal).**
 - **Empty states:** no channels joined, empty channel, no DMs, empty public-channel list, no pending invites, no avatar (initials badge).
 - **Loading states:** history fetch, message send (optimistic + pending), media upload (progress + cancel), invite send (pending confirmation).
