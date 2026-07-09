@@ -658,7 +658,5 @@ class TestLastAdminGuardConcurrency:
         db_session.expire_all()
         reloaded_a = await db_session.get(User, a_id)
         reloaded_b = await db_session.get(User, b_id)
-        still_active = [
-            u for u in (reloaded_a, reloaded_b) if u is not None and u.is_active
-        ]
+        still_active = [u for u in (reloaded_a, reloaded_b) if u is not None and u.is_active]
         assert len(still_active) == 1

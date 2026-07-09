@@ -1,4 +1,4 @@
-"""Pydantic schemas for `/v1/channels*` (T18, frozen contract).
+"""Pydantic schemas for `/v1/channels*` (T18/T19, frozen contract).
 
 `ChannelCreateRequest` is validated manually via
 `app.core.request_body.parse_body` (not a typed FastAPI body parameter),
@@ -16,6 +16,19 @@ Three distinct response shapes, matched exactly to the frozen contract:
   channel).
 - `PublicChannelItem` (an entry in `GET /v1/channels/public`'s `items`):
   the trimmed `{ id, name, is_private, member_count }` shape only.
+
+T19 (membership mutation) adds:
+
+- `MembershipResponse`: the `{ channel_id, user_id, role, joined_at }`
+  shape shared by `POST /{id}/join`, `POST /{id}/members`, and `PATCH
+  /{id}/members/{user_id}`.
+- `MemberAddRequest` / `MemberRoleUpdateRequest`: request bodies for the
+  same two mutating endpoints. `role` is deliberately typed `str` (not
+  `ChannelRoleWire`) so an unknown value is caught by the route's own
+  semantic `422` check rather than Pydantic's structural validation
+  folding it into the `400` malformed-body path.
+- `MemberListItem` / `MemberListResponse`: `GET /{id}/members`'s
+  `{ items, total }` envelope.
 """
 
 from __future__ import annotations
@@ -27,7 +40,8 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.models.channel import Channel
-from app.models.channel_member import ChannelMemberRole
+from app.models.channel_member import ChannelMember, ChannelMemberRole
+from app.models.user import User
 
 ChannelRoleWire = Literal["member", "admin"]
 
@@ -111,3 +125,71 @@ class PublicChannelListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class MembershipResponse(BaseModel):
+    """`200` body shared by `POST /{id}/join`, `POST`/`PATCH .../members(/{user_id})`."""
+
+    channel_id: UUID
+    user_id: UUID
+    role: ChannelRoleWire
+    joined_at: datetime
+
+    @classmethod
+    def from_membership(cls, membership: ChannelMember) -> MembershipResponse:
+        return cls(
+            channel_id=membership.channel_id,
+            user_id=membership.user_id,
+            role=membership.role.value,
+            joined_at=membership.joined_at,
+        )
+
+
+class MemberAddRequest(BaseModel):
+    """Body of `POST /v1/channels/{id}/members`.
+
+    `role`'s validity (`member`/`admin`) is deliberately *not* enforced
+    here — only structural presence/type — so an unknown value maps to
+    the frozen `422` (checked by the route after this structural parse
+    succeeds) rather than Pydantic's own `400` malformed-body path.
+    """
+
+    user_id: UUID
+    role: str
+
+
+class MemberRoleUpdateRequest(BaseModel):
+    """Body of `PATCH /v1/channels/{id}/members/{user_id}` — see `MemberAddRequest`."""
+
+    role: str
+
+
+class MemberListItem(BaseModel):
+    """One entry of `GET /v1/channels/{id}/members`'s `items` array."""
+
+    user_id: UUID
+    username: str
+    first_name: str
+    last_name: str
+    avatar_url: str | None
+    role: ChannelRoleWire
+    joined_at: datetime
+
+    @classmethod
+    def from_row(cls, user: User, membership: ChannelMember) -> MemberListItem:
+        return cls(
+            user_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            avatar_url=user.avatar_url,
+            role=membership.role.value,
+            joined_at=membership.joined_at,
+        )
+
+
+class MemberListResponse(BaseModel):
+    """`200` envelope of `GET /v1/channels/{id}/members` — offset-pagination shape."""
+
+    items: list[MemberListItem]
+    total: int

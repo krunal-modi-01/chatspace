@@ -16,14 +16,16 @@ T13 adds `/v1/invites*` (System Admin invite issuance/lifecycle,
 `app.api.invites`, extended by T43 with the `GET /v1/invites` list read).
 T18 adds `/v1/channels*` (create/get/public browse, `app.api.channels`).
 T44 adds `/v1/admin/*` (System Admin user directory + deactivate/
-reactivate, `app.api.admin`).
+reactivate, `app.api.admin`). T21 adds `/v1/channels/{id}/messages` +
+`/v1/messages/{id}` (channel message send/edit/delete/history,
+`app.api.messages`, persist-only — fan-out is T24).
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import admin, auth, channels, health, invites, me, password, sessions
+from app.api import admin, auth, channels, health, invites, me, messages, password, sessions
 
 api_router = APIRouter(prefix="/v1")
 api_router.include_router(health.router)
@@ -33,4 +35,5 @@ api_router.include_router(password.router)
 api_router.include_router(me.router)
 api_router.include_router(invites.router)
 api_router.include_router(channels.router)
+api_router.include_router(messages.router)
 api_router.include_router(admin.router)
