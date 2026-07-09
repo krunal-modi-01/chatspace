@@ -142,9 +142,7 @@ class TestCreateChannel:
         assert "id" in body and "created_by" in body and "created_at" in body
 
     async def test_missing_auth_is_401(self, migrated_db: None, client: TestClient) -> None:
-        response = client.post(
-            "/v1/channels", json={"name": "engineering", "is_private": False}
-        )
+        response = client.post("/v1/channels", json={"name": "engineering", "is_private": False})
 
         assert response.status_code == 401
         assert response.headers["content-type"] == "application/problem+json"
@@ -221,9 +219,7 @@ class TestGetChannel:
 
         _, other_token = await _authed_user(db_session)
 
-        response = client.get(
-            f"/v1/channels/{channel.id}", headers=_auth_header(other_token)
-        )
+        response = client.get(f"/v1/channels/{channel.id}", headers=_auth_header(other_token))
 
         assert response.status_code == 404
         assert response.headers["content-type"] == "application/problem+json"
@@ -316,9 +312,7 @@ class TestPublicChannelBrowse:
     ) -> None:
         _, token = await _authed_user(db_session)
 
-        response = client.get(
-            f"/v1/channels/public?{query}", headers=_auth_header(token)
-        )
+        response = client.get(f"/v1/channels/public?{query}", headers=_auth_header(token))
 
         assert response.status_code == 400
         assert response.headers["content-type"] == "application/problem+json"
@@ -328,9 +322,7 @@ class TestPublicChannelBrowse:
     ) -> None:
         _, token = await _authed_user(db_session)
 
-        response = client.get(
-            "/v1/channels/public?limit=999", headers=_auth_header(token)
-        )
+        response = client.get("/v1/channels/public?limit=999", headers=_auth_header(token))
 
         assert response.status_code == 200
         assert response.json()["limit"] == 50
