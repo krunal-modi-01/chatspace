@@ -27,6 +27,8 @@ from app.db.redis import dispose_redis_client
 from app.db.session import dispose_engine, get_sessionmaker
 from app.services.bootstrap import ensure_system_admin_bootstrapped
 from app.services.email import verify_email_config
+from app.ws.connection_manager import connection_manager
+from app.ws.router import ws_router
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             raise
 
     yield
+
+    # Server shutdown/instance drain (T23, contract close code 1001): give
+    # every live `/v1/ws` connection a documented close instead of a hard
+    # TCP drop, before tearing down the DB/Redis clients those connections
+    # would otherwise still be trying to use.
+    await connection_manager.close_all()
     await dispose_engine()
     await dispose_redis_client()
 
@@ -110,6 +118,10 @@ def create_app() -> FastAPI:
     install_error_handlers(app)
 
     app.include_router(api_router)
+    # `/v1/ws` (T23): wired directly rather than through `api_router` since
+    # that router is documented REST-only — see `app.api.router`'s module
+    # docstring.
+    app.include_router(ws_router, prefix="/v1")
 
     logger.info("chatspace API startup complete", extra={"app_env": settings.app_env})
 
