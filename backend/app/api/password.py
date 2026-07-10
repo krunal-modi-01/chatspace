@@ -33,13 +33,23 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.deps import AuthenticatedUser, require_auth
 from app.core.password_policy import enforce_password_policy
+from app.core.rate_limit_deps import enforce_auth_rate_limit
 from app.core.request_body import openapi_request_body, parse_body
 from app.core.security import hash_password, verify_password
 from app.db.redis import get_redis_client
@@ -182,12 +192,21 @@ async def _process_password_reset_request(
     openapi_extra=openapi_request_body(PasswordResetRequest, {"email": "alice@co.com"}),
 )
 async def request_password_reset(
+    request: Request,
     payload: _Payload,
     background_tasks: BackgroundTasks,
     settings: _AppSettings,
     email_service: _Email,
 ) -> PasswordResetAcceptedResponse:
     body = parse_body(PasswordResetRequest, payload)
+
+    # T27: `RateLimitScope.AUTH` (5/5min per IP + attempted identifier,
+    # non-enumerating) — this is a Redis round-trip only, never a DB or
+    # SMTP call, so it does not reintroduce the timing side-channel the
+    # comment below guards against: it runs identically regardless of
+    # whether `body.email` matches an account, since `enforce_auth_rate_limit`
+    # never looks the identifier up before checking it.
+    await enforce_auth_rate_limit(request, identifier=body.email)
 
     # Timing fix (HIGH, security review — F15 non-enumeration): the
     # entire account-dependent sequence (user lookup, token issuance, and

@@ -58,6 +58,7 @@ from app.core.correlation import HEADER_NAME
 from app.core.deps import AuthenticatedUser, require_auth
 from app.core.errors import PROBLEM_CONTENT_TYPE, build_problem_body
 from app.core.pagination import CursorKey, PaginationError, decode_cursor, resolve_limit
+from app.core.rate_limit_deps import enforce_message_send_rate_limit
 from app.core.request_body import openapi_request_body, parse_body
 from app.db.redis import get_redis_client
 from app.db.session import get_db_session
@@ -200,6 +201,7 @@ async def send_channel_message_route(
     payload: _Payload,
     current: _CurrentUser,
     db: _DbSession,
+    _rate_limit_guard: Annotated[None, Depends(enforce_message_send_rate_limit)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> Any:
     key = _parse_idempotency_key(idempotency_key)
@@ -385,6 +387,7 @@ async def send_dm_message_route(
     payload: _Payload,
     current: _CurrentUser,
     db: _DbSession,
+    _rate_limit_guard: Annotated[None, Depends(enforce_message_send_rate_limit)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> Any:
     """`POST /v1/dms/{user_id}/messages` (T22) — `user_id` is the recipient.

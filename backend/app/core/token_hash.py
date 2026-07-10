@@ -67,3 +67,22 @@ def hash_invite_token(raw_token: str) -> str:
     """
 
     return _sha256_hex(raw_token)
+
+
+def hash_rate_limit_identifier(raw_identifier: str) -> str:
+    """Return the deterministic SHA-256 hex digest of an auth-scope rate-limit identifier.
+
+    `app.core.rate_limit.auth_rate_limit_subject` (T27, `RateLimitScope.AUTH`)
+    uses this to fold an "attempted identifier" (email, invite token, or
+    refresh token — whichever credential the specific auth endpoint is
+    keyed on) into the Redis token-bucket key. Unlike `hash_refresh_token`/
+    `hash_reset_token`, this is not a lookup-by-hash use case — it exists
+    only so a sensitive raw value (PII or a bearer secret) never sits in
+    the Redis keyspace verbatim, even though Redis keys are not a "log" in
+    the CLAUDE.md sense. Deterministic (not salted) is still correct here:
+    the goal is "don't store the raw value", not "resist a slow offline
+    guessing attack" — the same reasoning as the other functions in this
+    module.
+    """
+
+    return _sha256_hex(raw_identifier)

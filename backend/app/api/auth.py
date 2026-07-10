@@ -24,7 +24,6 @@ failure never consumes the invite.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import logging
 from typing import Annotated
@@ -34,9 +33,11 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_ip import extract_client_ip
 from app.core.config import Settings, get_settings
 from app.core.deps import AuthenticatedUser, require_auth
 from app.core.password_policy import enforce_password_policy
+from app.core.rate_limit_deps import enforce_auth_rate_limit
 from app.core.request_body import openapi_request_body
 from app.db.redis import get_redis_client
 from app.db.session import get_db_session
@@ -93,17 +94,12 @@ def _client_ip(request: Request) -> str | None:
     `"testclient"` host, or a malformed/hostname value from an
     unconventional proxy) must be dropped rather than sent to asyncpg,
     which raises a hard `DataError` for a non-IP value instead of
-    coercing it.
+    coercing it. Thin wrapper around the shared
+    `app.core.client_ip.extract_client_ip` (T27 also uses that helper for
+    the `RateLimitScope.AUTH` IP+identifier key).
     """
 
-    host = request.client.host if request.client else None
-    if host is None:
-        return None
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        return None
-    return host
+    return extract_client_ip(request)
 
 
 async def _parse_body[T: BaseModel](request: Request, model: type[T]) -> T:
@@ -155,6 +151,14 @@ async def login(request: Request, db: _DbSession, settings: _SettingsDep) -> Log
 
     body = await _parse_body(request, LoginRequest)
 
+    # T27: `RateLimitScope.AUTH` (5/5min per IP + attempted identifier,
+    # non-enumerating) — checked *before* any account lookup so the
+    # bucket key never varies by whether `body.email` matches a real
+    # account (F11/F64). A breach raises `RateLimitExceededError`
+    # (`429`) or, on a fail-closed Redis outage, `RateLimitUnavailableError`
+    # (`503`) — both rendered globally by `app.core.errors`.
+    await enforce_auth_rate_limit(request, identifier=body.email)
+
     try:
         result = await authenticate_and_login(
             db,
@@ -199,6 +203,11 @@ async def refresh(request: Request, db: _DbSession, settings: _SettingsDep) -> R
     """
 
     body = await _parse_body(request, RefreshRequest)
+
+    # T27: `RateLimitScope.AUTH`, keyed on the attempted refresh token
+    # itself (there is no email/username on this endpoint) — same
+    # non-enumerating "check before lookup" rule as `login` above.
+    await enforce_auth_rate_limit(request, identifier=body.refresh_token)
 
     try:
         result = await refresh_session(db, raw_refresh_token=body.refresh_token, settings=settings)
@@ -280,6 +289,11 @@ async def register(request: Request, db: _DbSession) -> RegisteredUser:
     """
 
     body = await _parse_body(request, RegisterRequest)
+
+    # T27: `RateLimitScope.AUTH`, keyed on the attempted invite token —
+    # the "attempted identifier" for this endpoint, checked before the
+    # invite lookup so a breach never hints at token validity.
+    await enforce_auth_rate_limit(request, identifier=body.invite_token)
 
     invite = await find_valid_invite_by_token(db, body.invite_token)
     if invite is None:
