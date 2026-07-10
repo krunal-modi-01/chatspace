@@ -1,8 +1,9 @@
-"""`/v1/channels/{id}/messages` + `/v1/messages/{id}` — T21, frozen contract.
+"""`/v1/channels/{id}/messages` + `/v1/messages/{id}` + `/v1/dms/{user_id}/messages`
+— T21/T22, frozen contract.
 
-Persist-only (T21 scope): none of these routes publish a WS event or
+Persist-only (T21/T22 scope): none of these routes publish a WS event or
 Redis pub/sub message — `message.created`/`edited`/`deleted` fan-out is
-T24's job. Four endpoints:
+T24's job. Six endpoints:
 
 - `POST /v1/channels/{channel_id}/messages`: send a channel message.
   Required `Idempotency-Key` header (client UUID); missing/malformed is
@@ -22,6 +23,17 @@ T24's job. Four endpoints:
   deleted.
 - `DELETE /v1/messages/{message_id}`: author-only soft delete; `204`,
   idempotent on repeat.
+- `POST /v1/dms/{user_id}/messages` (T22): send a 1:1 DM to `user_id` (the
+  recipient). Same required `Idempotency-Key`/`400` and `503` fail-closed
+  shape as the channel send, reusing `app.services.messages
+  ._claim_and_persist_message` (T21's shared send/idempotency helper).
+  Self-DM (`user_id` == caller) is `422`, not `404`; a missing or inactive
+  recipient is `404`.
+- `GET /v1/dms/{user_id}/messages` (T22): cursor-paginated DM history with
+  `user_id`, keyed on the canonical `least(sender_id,
+  recipient_id)`/`greatest(...)` user pair (`ix_messages_dm_history`).
+  Self-conversation (`user_id` == caller) is `422`; a nonexistent other
+  participant is `404` (uniform, no `is_active` distinction on this path).
 
 Every body is parsed via `app.core.request_body.parse_body` (not a typed
 FastAPI body parameter), matching `app.api.channels`'s existing
@@ -60,13 +72,18 @@ from app.services.messages import (
     MessageNotFoundError,
     NotChannelMemberError,
     NotMessageAuthorError,
+    RecipientNotFoundError,
+    SelfDMError,
     delete_message,
     edit_message,
     ensure_channel_and_membership,
+    ensure_dm_history_access,
     get_channel_message_history,
+    get_dm_message_history,
     get_media_for_messages,
     get_message_media,
     send_channel_message,
+    send_dm_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,6 +107,10 @@ _IDEMPOTENCY_TIMEOUT_DETAIL = (
 # very likely to land on an already-settled claim rather than repeating the
 # same timeout.
 _IDEMPOTENCY_TIMEOUT_RETRY_AFTER_SECONDS = "1"
+_SELF_DM_SEND_DETAIL = "You cannot send a DM to yourself."
+_SELF_DM_HISTORY_DETAIL = "user_id must not be your own id; there is no self-conversation."
+_RECIPIENT_NOT_FOUND_DETAIL = "Recipient does not exist or is inactive."
+_DM_PARTICIPANT_NOT_FOUND_DETAIL = "No such user."
 
 _CurrentUser = Annotated[AuthenticatedUser, Depends(require_auth)]
 _DbSession = Annotated[AsyncSession, Depends(get_db_session)]
@@ -140,6 +161,27 @@ def _parse_cursor(raw: str | None) -> CursorKey | None:
         return decode_cursor(raw)
     except PaginationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail) from exc
+
+
+def _idempotency_timeout_response(*, instance: str) -> JSONResponse:
+    """Shared `503` + `Retry-After` problem+json builder for the fail-closed
+    `IdempotencyResolutionTimeoutError` path — identical for channel send
+    and DM send (T22 reuses T21's shape verbatim, only `instance` differs).
+    """
+
+    problem_body = build_problem_body(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=_IDEMPOTENCY_TIMEOUT_DETAIL,
+        instance=instance,
+    )
+    problem_response = JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content=problem_body,
+        media_type=PROBLEM_CONTENT_TYPE,
+        headers={"Retry-After": _IDEMPOTENCY_TIMEOUT_RETRY_AFTER_SECONDS},
+    )
+    problem_response.headers[HEADER_NAME] = problem_body["correlation_id"]
+    return problem_response
 
 
 @router.post(
@@ -200,19 +242,7 @@ async def send_channel_message_route(
             "idempotency claim resolution timed out",
             extra={"channel_id": str(channel_id), "sender_id": str(current.user_id)},
         )
-        problem_body = build_problem_body(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_IDEMPOTENCY_TIMEOUT_DETAIL,
-            instance=f"/v1/channels/{channel_id}/messages",
-        )
-        problem_response = JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content=problem_body,
-            media_type=PROBLEM_CONTENT_TYPE,
-            headers={"Retry-After": _IDEMPOTENCY_TIMEOUT_RETRY_AFTER_SECONDS},
-        )
-        problem_response.headers[HEADER_NAME] = problem_body["correlation_id"]
-        return problem_response
+        return _idempotency_timeout_response(instance=f"/v1/channels/{channel_id}/messages")
 
     logger.info(
         "channel message sent",
@@ -335,3 +365,135 @@ async def delete_message_route(message_id: UUID, current: _CurrentUser, db: _DbS
         "message deleted",
         extra={"message_id": str(message_id), "sender_id": str(current.user_id)},
     )
+
+
+@router.post(
+    "/dms/{user_id}/messages",
+    response_model=MessageObject,
+    openapi_extra=openapi_request_body(
+        MessageSendRequest, {"content": "hey, got a minute?", "media_ids": []}
+    ),
+)
+async def send_dm_message_route(
+    user_id: UUID,
+    payload: _Payload,
+    current: _CurrentUser,
+    db: _DbSession,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> Any:
+    """`POST /v1/dms/{user_id}/messages` (T22) — `user_id` is the recipient.
+
+    Reuses T21's `Idempotency-Key` parsing/claim-and-persist helper
+    verbatim (`app.services.messages._claim_and_persist_message` via
+    `send_dm_message`); only the business-rule gates (self-DM,
+    recipient existence/active-state) and the resulting row shape
+    (`recipient_id` set, `channel_id` NULL) differ from the channel send.
+    """
+
+    key = _parse_idempotency_key(idempotency_key)
+    body = parse_body(MessageSendRequest, payload)
+
+    redis = get_redis_client()
+
+    try:
+        result = await send_dm_message(
+            db,
+            redis,
+            recipient_id=user_id,
+            sender_id=current.user_id,
+            content=body.content,
+            media_ids=body.media_ids,
+            idempotency_key=key,
+        )
+    except SelfDMError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=_SELF_DM_SEND_DETAIL
+        ) from None
+    except RecipientNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_RECIPIENT_NOT_FOUND_DETAIL
+        ) from None
+    except InvalidContentError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=_INVALID_CONTENT_DETAIL
+        ) from None
+    except InvalidMediaError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=_INVALID_MEDIA_DETAIL
+        ) from None
+    except IdempotencyResolutionTimeoutError:
+        # Fail-closed per F40 (see `app.services.messages` module docstring)
+        # — identical rationale/shape to the channel-send `503` above.
+        logger.warning(
+            "dm idempotency claim resolution timed out",
+            extra={"recipient_id": str(user_id), "sender_id": str(current.user_id)},
+        )
+        return _idempotency_timeout_response(instance=f"/v1/dms/{user_id}/messages")
+
+    logger.info(
+        "dm sent",
+        extra={
+            "recipient_id": str(user_id),
+            "message_id": str(result.message.id),
+            "sender_id": str(current.user_id),
+            "idempotent_replay": not result.created,
+        },
+    )
+
+    response_body = MessageObject.from_message(result.message, media=result.media)
+    status_code = status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
+    return JSONResponse(status_code=status_code, content=response_body.model_dump(mode="json"))
+
+
+@router.get(
+    "/dms/{user_id}/messages",
+    response_model=MessageHistoryResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_dm_message_history_route(
+    user_id: UUID,
+    current: _CurrentUser,
+    db: _DbSession,
+    limit: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query()] = None,
+) -> MessageHistoryResponse:
+    """`GET /v1/dms/{user_id}/messages` (T22) — cursor-paginated 1:1 DM history.
+
+    Keyed on the canonical unordered `(sender_id, recipient_id)` pair
+    (ADR-0002) via `app.services.messages.get_dm_message_history`, which
+    hits the shipped functional+partial `ix_messages_dm_history` index.
+    The caller is always one of the two participants by construction (JWT
+    subject + path `user_id`); `ensure_dm_history_access` only needs to
+    reject a self-conversation (`422`) and confirm the other participant
+    exists (`404`, uniform).
+    """
+
+    resolved_limit = _parse_limit(limit)
+    resolved_cursor = _parse_cursor(cursor)
+
+    try:
+        await ensure_dm_history_access(db, other_user_id=user_id, caller_id=current.user_id)
+    except SelfDMError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=_SELF_DM_HISTORY_DETAIL
+        ) from None
+    except RecipientNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_DM_PARTICIPANT_NOT_FOUND_DETAIL
+        ) from None
+
+    page = await get_dm_message_history(
+        db,
+        caller_id=current.user_id,
+        other_user_id=user_id,
+        limit=resolved_limit,
+        cursor=resolved_cursor,
+    )
+
+    media_by_message = await get_media_for_messages(db, [m.id for m in page.items])
+    items = [
+        MessageObject.from_message(message, media=media_by_message.get(message.id, []))
+        for message in page.items
+    ]
+
+    return MessageHistoryResponse(items=items, next_cursor=page.next_cursor)

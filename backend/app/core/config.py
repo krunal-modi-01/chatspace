@@ -142,6 +142,39 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- WebSocket connection manager (T23, F52, ADR-0006) ------------------
+    ws_heartbeat_timeout_seconds: float = Field(
+        default=45.0,
+        gt=0,
+        description=(
+            "Max seconds a `/v1/ws` connection may go without receiving any "
+            "client frame before it is presumed dead and reaped with close "
+            "code 4408 (heartbeat-timeout). Chosen as roughly 2x the client's "
+            "expected ping interval (~20s) so ordinary network jitter never "
+            "trips it, per ADR-0006's follow-up that the backend-engineer "
+            "sets and records this interval — it also bounds the worst-case "
+            "mid-connection revocation lag (a revoked/deactivated session is "
+            "re-checked, at latest, on the next client `ping` within this "
+            "window)."
+        ),
+    )
+    ws_frame_rate_limit_max_frames: int = Field(
+        default=30,
+        gt=0,
+        description=(
+            "Max client frames (`join`/`leave`/`typing`/`ping`) accepted per "
+            "`ws_frame_rate_limit_window_seconds` on a single WS connection "
+            "before it is closed with code 4429 (rate-limited) — an abuse "
+            "guard on the connection itself, independent of and in addition "
+            "to the per-user REST message-send rate limit (T27)."
+        ),
+    )
+    ws_frame_rate_limit_window_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        description="Sliding window (seconds) `ws_frame_rate_limit_max_frames` is measured over.",
+    )
+
     # --- SMTP / transactional email (ADR-0010) ------------------------------
     smtp_host: str = Field(..., description="SMTP server host.")
     smtp_port: int = Field(..., gt=0, le=65535, description="SMTP server port.")
