@@ -35,5 +35,5 @@ api_router.include_router(password.router)
 api_router.include_router(me.router)
 api_router.include_router(invites.router)
 api_router.include_router(channels.router)
-api_router.include_router(messages.router)
+api_router.include_router(messages.router)  # T21 channels/messages + T22 dms/messages
 api_router.include_router(admin.router)
