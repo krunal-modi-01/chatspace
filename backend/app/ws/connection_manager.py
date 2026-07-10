@@ -1,11 +1,18 @@
-"""Per-process WebSocket connection registry + subscription bookkeeping (T23).
+"""Per-process WebSocket connection registry + subscription bookkeeping (T23/T24).
 
 Tracks every live `/v1/ws` connection on this instance and which
 conversation topics (`chan:{channel_id}` / `dm:{a}:{b}`, from
 `app.core.redis_keys`) it is subscribed to. This is in-process
 bookkeeping only — it does **not** publish/subscribe to Redis pub/sub
-(that fan-out wiring is T24) and does not persist anything; a connection
-disappears from the registry the moment it disconnects.
+itself (that is `app.ws.fanout.PubSubRelay`, T24's per-instance
+subscriber) and does not persist anything; a connection disappears from
+the registry the moment it disconnects.
+
+`broadcast_to_topic` (T24) is the relay's only entry point into this
+class: given an already-decoded fan-out event and the topic it arrived
+on, it delivers that event to every *local* connection subscribed to
+that topic — the last hop of "instance A publishes, instance B's
+subscriber relays to its own local sockets" (no session affinity, F53).
 
 Also owns the server-drain path: `close_all` closes every registered
 connection with close code 1001 (going away), used by the application
@@ -19,7 +26,7 @@ import logging
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketState
 
 from app.core.ids import generate_id
 from app.ws.close_codes import WSCloseCode
@@ -94,6 +101,31 @@ class ConnectionManager:
 
     def __len__(self) -> int:
         return len(self._connections)
+
+    async def broadcast_to_topic(self, topic: str, payload: dict[str, object]) -> None:
+        """Relay `payload` to every local connection currently subscribed to `topic`.
+
+        Called once per received fan-out message by
+        `app.ws.fanout.PubSubRelay` — never by request-handling code
+        directly. Best-effort per connection: a send failure to one
+        socket (already disconnected, transient error) is logged and
+        skipped rather than aborting delivery to every other subscribed
+        connection. `payload` must already be the exact wire envelope
+        (no further transformation happens here).
+        """
+
+        for state in list(self._connections.values()):
+            if topic not in state.subscribed_topics:
+                continue
+            if state.websocket.application_state != WebSocketState.CONNECTED:
+                continue
+            try:
+                await state.websocket.send_json(payload)
+            except Exception:  # noqa: BLE001 - best-effort fan-out, one bad socket must not block the rest
+                logger.warning(
+                    "failed to relay fan-out event to a local connection",
+                    extra={"connection_id": str(state.connection_id), "topic": topic},
+                )
 
     async def close_all(
         self, *, code: WSCloseCode = WSCloseCode.GOING_AWAY, reason: str = "server draining"

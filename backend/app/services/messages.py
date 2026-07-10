@@ -1,9 +1,26 @@
 """Channel + DM message send/history business logic (T21/T22, F38-F48).
 
-Persist-only: this module never publishes a WS event or Redis pub/sub
-message (`message.created`/`edited`/`deleted`) — that fan-out is T24's
-scope. Every function here does exactly the durable-state half of the
-frozen contract's endpoints and returns plain ORM rows for
+Persist-then-publish (T24): `send_channel_message`/`send_dm_message`/
+`edit_message`/`delete_message` publish the corresponding
+`message.created`/`edited`/`deleted` Redis pub/sub fan-out event (via
+`app.services.message_events`) strictly *after* their own `db.commit()`
+has returned — never before, and never for a call that only observed an
+existing row rather than writing one:
+
+- A send that resolves to an idempotent **replay** (`created=False`)
+  does not publish — no new commit happened on this call, and the
+  original send already published once. Reconnect catch-up (F55), not a
+  republish, is the documented recovery for a client that missed it.
+- An edit whose `content` is unchanged from the current row (the
+  documented safe no-op) does not publish `message.edited` — `edited_at`
+  is not updated in that case either (F42), so nothing changed to
+  broadcast.
+- A repeat `delete_message` call on an already-soft-deleted row (the
+  documented idempotent `204`) does not publish `message.deleted` again
+  — the row's `deleted_at` does not change on that call.
+
+Every function here otherwise still does exactly the durable-state half
+of the frozen contract's endpoints and returns plain ORM rows for
 `app.api.messages` to serialize.
 
 ## T22 — DM send/history (built on T21's shared send/idempotency helper)
@@ -142,6 +159,11 @@ from app.models.channel import Channel
 from app.models.message import Message
 from app.models.user import User
 from app.services.channels import get_membership
+from app.services.message_events import (
+    publish_message_created,
+    publish_message_deleted,
+    publish_message_edited,
+)
 
 # Generous replay window — long enough that a client retrying a genuinely
 # slow/uncertain send (e.g. after a timeout on its side) still hits the
@@ -543,6 +565,12 @@ async def _claim_and_persist_message(
     concurrent winner's row on a loss — bounded by `_CLAIM_MAX_ROUNDS`,
     fail-closed via `IdempotencyResolutionTimeoutError` if it never
     settles. See the module docstring for the full race-safety rationale.
+
+    Persist-then-publish (T24): only the actual claim *winner* — the
+    branch that just committed a brand-new row — publishes
+    `message.created`, and only after `db.commit()` returns. A caller
+    that resolves to a concurrent winner's row (`created=False`) is a
+    replay, not a new commit, and never publishes.
     """
 
     message_id = generate_id()
@@ -568,6 +596,12 @@ async def _claim_and_persist_message(
                     redis, sender_id=sender_id, idempotency_key=idempotency_key
                 )
                 raise
+
+            # Fan-out only after the commit above has returned (T24,
+            # persist-then-publish); fails open on its own (never raises),
+            # so a Redis outage here cannot turn a successful send into an
+            # error response.
+            await publish_message_created(redis, message)
 
             return SendMessageResult(message=message, media=bound_media, created=True)
 
@@ -607,8 +641,9 @@ async def send_channel_message(
     to the frozen `404`/`403`/`422`, or `IdempotencyResolutionTimeoutError`
     (fail-closed, `503`) if a concurrent claim never resolves within the
     bounded retry window — see the module docstring and
-    `_resolve_existing_claim`. Never publishes a WS/Redis fan-out event
-    (T24's scope) — persist only.
+    `_resolve_existing_claim`. Publishes `message.created` (T24) once —
+    and only once — a brand-new row is actually committed; a resolved
+    replay never re-publishes (see `_claim_and_persist_message`).
     """
 
     resolved = await _resolve_existing_claim(
@@ -709,8 +744,9 @@ async def send_dm_message(
     route layer to map per the frozen contract, or
     `IdempotencyResolutionTimeoutError` (fail-closed, `503`) exactly as
     `send_channel_message` does — see `_claim_and_persist_message`, the
-    shared T21 helper this reuses. Never publishes a WS/Redis fan-out
-    event (T24's scope) — persist only.
+    shared T21 helper this reuses. Publishes `message.created` (T24) to
+    the DM's canonical `dm:{least}:{greatest}` topic under the same
+    winner-only rule as the channel send.
     """
 
     resolved = await _resolve_existing_claim(
@@ -886,14 +922,17 @@ async def _ensure_caller_can_see_message(
 
 
 async def edit_message(
-    db: AsyncSession, *, message_id: UUID, caller_id: UUID, content: str
+    db: AsyncSession, redis: Redis, *, message_id: UUID, caller_id: UUID, content: str
 ) -> Message:
     """Author-only edit; sets `edited_at` unless the content is unchanged (F42).
 
     Raises `MessageNotFoundError` / `NotMessageAuthorError` /
     `MessageAlreadyDeletedError` / `InvalidContentError` for the route
-    layer to map to `404`/`403`/`409`/`422`. Never publishes the
-    `message.edited` WS event (T24's scope).
+    layer to map to `404`/`403`/`409`/`422`. Publishes `message.edited`
+    (T24) after commit, but only when this call actually changed the row
+    (content differs from the current value) — the documented
+    unchanged-content no-op does not re-broadcast an edit that didn't
+    happen.
     """
 
     message = await db.get(Message, message_id)
@@ -911,21 +950,32 @@ async def edit_message(
     if not is_valid_content(content):
         raise InvalidContentError("content must be 1-4000 non-whitespace characters.")
 
-    if content != message.content:
+    changed = content != message.content
+    if changed:
         message.content = content
         message.edited_at = datetime.now(UTC)
         await db.flush()
 
     await db.commit()
+
+    if changed:
+        # Persist-then-publish (T24): fires only after the commit above
+        # has returned; fails open on its own (never raises).
+        await publish_message_edited(redis, message)
+
     return message
 
 
-async def delete_message(db: AsyncSession, *, message_id: UUID, caller_id: UUID) -> Message:
+async def delete_message(
+    db: AsyncSession, redis: Redis, *, message_id: UUID, caller_id: UUID
+) -> Message:
     """Author-only soft delete; idempotent (repeat delete is a no-op `204`, F43).
 
     Raises `MessageNotFoundError` / `NotMessageAuthorError` for the route
-    layer to map to `404`/`403`. Never publishes the `message.deleted` WS
-    event (T24's scope). Row is retained either way — never removed.
+    layer to map to `404`/`403`. Publishes `message.deleted` (T24) after
+    commit, but only on the call that actually sets `deleted_at` — a
+    repeat delete on an already-deleted row does not re-broadcast. Row is
+    retained either way — never removed.
     """
 
     message = await db.get(Message, message_id)
@@ -937,9 +987,16 @@ async def delete_message(db: AsyncSession, *, message_id: UUID, caller_id: UUID)
     if message.sender_id != caller_id:
         raise NotMessageAuthorError(f"{caller_id} did not author {message_id}.")
 
-    if message.deleted_at is None:
+    already_deleted = message.deleted_at is not None
+    if not already_deleted:
         message.deleted_at = datetime.now(UTC)
         await db.flush()
 
     await db.commit()
+
+    if not already_deleted:
+        # Persist-then-publish (T24): fires only after the commit above
+        # has returned; fails open on its own (never raises).
+        await publish_message_deleted(redis, message)
+
     return message

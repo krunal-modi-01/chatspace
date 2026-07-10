@@ -1,9 +1,13 @@
 """`/v1/channels/{id}/messages` + `/v1/messages/{id}` + `/v1/dms/{user_id}/messages`
 — T21/T22, frozen contract.
 
-Persist-only (T21/T22 scope): none of these routes publish a WS event or
-Redis pub/sub message — `message.created`/`edited`/`deleted` fan-out is
-T24's job. Six endpoints:
+Persist-then-publish (T24): send/edit/delete each pass the process-wide
+`get_redis_client()` client through to their `app.services.messages`
+call, which publishes the corresponding `message.created`/`edited`/
+`deleted` Redis pub/sub fan-out event strictly after its own commit
+returns (see that module's docstring for the exact rules — e.g. an
+idempotent replay or a no-op edit/delete never re-publishes). Six
+endpoints:
 
 - `POST /v1/channels/{channel_id}/messages`: send a channel message.
   Required `Idempotency-Key` header (client UUID); missing/malformed is
@@ -314,10 +318,11 @@ async def edit_message_route(
     message_id: UUID, payload: _Payload, current: _CurrentUser, db: _DbSession
 ) -> MessageObject:
     body = parse_body(MessageEditRequest, payload)
+    redis = get_redis_client()
 
     try:
         message = await edit_message(
-            db, message_id=message_id, caller_id=current.user_id, content=body.content
+            db, redis, message_id=message_id, caller_id=current.user_id, content=body.content
         )
     except MessageNotFoundError:
         raise HTTPException(
@@ -350,8 +355,9 @@ async def edit_message_route(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_message_route(message_id: UUID, current: _CurrentUser, db: _DbSession) -> None:
+    redis = get_redis_client()
     try:
-        await delete_message(db, message_id=message_id, caller_id=current.user_id)
+        await delete_message(db, redis, message_id=message_id, caller_id=current.user_id)
     except MessageNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_MESSAGE_NOT_FOUND_DETAIL
