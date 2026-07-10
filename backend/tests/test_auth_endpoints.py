@@ -27,7 +27,7 @@ _TEST_CREDENTIAL = "correct-horse-1"
 async def _make_user(
     db: AsyncSession,
     *,
-    email: str = "alice@example.com",
+    email: str | None = None,
     password: str = _TEST_CREDENTIAL,
     is_active: bool = True,
     must_change_password: bool = False,
@@ -36,7 +36,14 @@ async def _make_user(
     user = User(
         id=generate_id(),
         username=f"user{unique}",
-        email=email,
+        # T27: a per-call unique default (not a fixed "alice@example.com"
+        # literal) — `POST /v1/auth/login` is now rate-limited per
+        # attempted identifier (`RateLimitScope.AUTH`, 5/5min), and this
+        # module's Redis test database is not flushed between tests, so
+        # every test in this file sharing one literal email would
+        # eventually exhaust that single bucket and see spurious `429`s
+        # instead of the status code each test is actually asserting.
+        email=email or f"alice-{unique}@example.com",
         hashed_password=hash_password(password),
         first_name="A",
         last_name="Lice",

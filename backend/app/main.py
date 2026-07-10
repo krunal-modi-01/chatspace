@@ -23,11 +23,12 @@ from app.core.correlation import HEADER_NAME
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import correlation_id_middleware
-from app.db.redis import dispose_redis_client
+from app.db.redis import dispose_redis_client, get_redis_client
 from app.db.session import dispose_engine, get_sessionmaker
 from app.services.bootstrap import ensure_system_admin_bootstrapped
 from app.services.email import verify_email_config
 from app.ws.connection_manager import connection_manager
+from app.ws.fanout import PubSubRelay
 from app.ws.router import ws_router
 
 logger = logging.getLogger(__name__)
@@ -61,12 +62,31 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             await session.rollback()
             raise
 
+    # T24: one Redis pub/sub relay per app instance, started before the app
+    # is considered ready to accept traffic. `relay.start()` itself never
+    # blocks on Redis being reachable and never raises — the actual
+    # `psubscribe` runs in the relay's own background task, retried with
+    # backoff until it succeeds (`PubSubRelay._subscribe_with_retry`), so a
+    # Redis blip at exactly this moment (a deploy/autoscale restart racing
+    # a Redis restart) self-heals instead of leaving this instance's live
+    # fan-out permanently degraded until an operator restarts it. The
+    # `try/except` below is defense-in-depth only (e.g. no running event
+    # loop to schedule the task on), not the primary safety net; the same
+    # fail-open posture `app.services.message_events.publish_message_event`
+    # applies to the publish side.
+    relay = PubSubRelay(get_redis_client())
+    try:
+        await relay.start()
+    except Exception:  # noqa: BLE001 - degrade, do not abort startup over Redis unavailability
+        logger.exception("ws pub/sub relay failed to start; live fan-out degraded on this instance")
+
     yield
 
     # Server shutdown/instance drain (T23, contract close code 1001): give
     # every live `/v1/ws` connection a documented close instead of a hard
     # TCP drop, before tearing down the DB/Redis clients those connections
     # would otherwise still be trying to use.
+    await relay.stop()
     await connection_manager.close_all()
     await dispose_engine()
     await dispose_redis_client()

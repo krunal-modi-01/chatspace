@@ -39,6 +39,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.correlation import HEADER_NAME, get_correlation_id
 from app.core.pagination import PaginationError
 from app.core.password_policy import PasswordPolicyError
+from app.core.rate_limit import RateLimitExceededError, RateLimitUnavailableError
 from app.core.request_body import MalformedBodyError
 from app.services.auth import MustChangePasswordError
 from app.services.registration import RegistrationFieldError
@@ -275,6 +276,60 @@ async def pagination_error_handler(request: Request, exc: Exception) -> JSONResp
     )
 
 
+async def rate_limit_exceeded_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Turn a `RateLimitExceededError` into the frozen `429` problem+json shape (T27).
+
+    Per spec line 39: "Over-limit responses are 429 Too Many Requests
+    with a Retry-After header (seconds) and a problem+json body." Built
+    directly (not via `HTTPException`) so the `Retry-After` header can be
+    attached — `http_exception_handler` above does not forward custom
+    headers from the exception it renders, matching
+    `app.api.messages._idempotency_timeout_response`'s existing pattern
+    for the same reason.
+    """
+
+    assert isinstance(exc, RateLimitExceededError)
+    response = _problem_response(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many requests. Please slow down and retry after the indicated delay.",
+        instance=request.url.path,
+    )
+    response.headers["Retry-After"] = str(exc.retry_after_seconds)
+    return response
+
+
+# Short, fixed hint for the fail-closed Redis-outage path — this is an
+# infra condition expected to clear quickly, not a real over-limit wait.
+_RATE_LIMIT_UNAVAILABLE_RETRY_AFTER_SECONDS = "1"
+
+
+async def rate_limit_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Turn a `RateLimitUnavailableError` into a `503` + `Retry-After` (T27).
+
+    Distinct from `rate_limit_exceeded_handler`'s `429`: this fires when a
+    fail-closed rate-limit check (auth, message-send) could not reach
+    Redis at all — an infra outage on the abuse-sensitive check itself,
+    per task T27's "fail-closed (reject) ... when Redis is unavailable",
+    not an actual over-limit verdict. Never logs the identifier/subject
+    that was being checked — only the request path.
+    """
+
+    assert isinstance(exc, RateLimitUnavailableError)
+    logger.warning(
+        "rate limiter unavailable; failing closed",
+        extra={"path": request.url.path},
+    )
+    response = _problem_response(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Rate limiting is temporarily unavailable; please retry shortly.",
+        instance=request.url.path,
+        title="Rate limiter unavailable",
+        type_slug="rate-limiter-unavailable",
+    )
+    response.headers["Retry-After"] = _RATE_LIMIT_UNAVAILABLE_RETRY_AFTER_SECONDS
+    return response
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     # Never leak internals (stack traces, exception messages) into the response;
     # the correlation id is the join key back to the (separately logged) detail.
@@ -312,4 +367,6 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RegistrationFieldError, registration_field_error_handler)
     app.add_exception_handler(MalformedBodyError, malformed_body_exception_handler)
     app.add_exception_handler(PaginationError, pagination_error_handler)
+    app.add_exception_handler(RateLimitExceededError, rate_limit_exceeded_handler)
+    app.add_exception_handler(RateLimitUnavailableError, rate_limit_unavailable_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)

@@ -1,9 +1,13 @@
 """`/v1/channels/{id}/messages` + `/v1/messages/{id}` + `/v1/dms/{user_id}/messages`
 — T21/T22, frozen contract.
 
-Persist-only (T21/T22 scope): none of these routes publish a WS event or
-Redis pub/sub message — `message.created`/`edited`/`deleted` fan-out is
-T24's job. Six endpoints:
+Persist-then-publish (T24): send/edit/delete each pass the process-wide
+`get_redis_client()` client through to their `app.services.messages`
+call, which publishes the corresponding `message.created`/`edited`/
+`deleted` Redis pub/sub fan-out event strictly after its own commit
+returns (see that module's docstring for the exact rules — e.g. an
+idempotent replay or a no-op edit/delete never re-publishes). Six
+endpoints:
 
 - `POST /v1/channels/{channel_id}/messages`: send a channel message.
   Required `Idempotency-Key` header (client UUID); missing/malformed is
@@ -54,6 +58,7 @@ from app.core.correlation import HEADER_NAME
 from app.core.deps import AuthenticatedUser, require_auth
 from app.core.errors import PROBLEM_CONTENT_TYPE, build_problem_body
 from app.core.pagination import CursorKey, PaginationError, decode_cursor, resolve_limit
+from app.core.rate_limit_deps import enforce_message_send_rate_limit
 from app.core.request_body import openapi_request_body, parse_body
 from app.db.redis import get_redis_client
 from app.db.session import get_db_session
@@ -196,6 +201,7 @@ async def send_channel_message_route(
     payload: _Payload,
     current: _CurrentUser,
     db: _DbSession,
+    _rate_limit_guard: Annotated[None, Depends(enforce_message_send_rate_limit)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> Any:
     key = _parse_idempotency_key(idempotency_key)
@@ -314,10 +320,11 @@ async def edit_message_route(
     message_id: UUID, payload: _Payload, current: _CurrentUser, db: _DbSession
 ) -> MessageObject:
     body = parse_body(MessageEditRequest, payload)
+    redis = get_redis_client()
 
     try:
         message = await edit_message(
-            db, message_id=message_id, caller_id=current.user_id, content=body.content
+            db, redis, message_id=message_id, caller_id=current.user_id, content=body.content
         )
     except MessageNotFoundError:
         raise HTTPException(
@@ -350,8 +357,9 @@ async def edit_message_route(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_message_route(message_id: UUID, current: _CurrentUser, db: _DbSession) -> None:
+    redis = get_redis_client()
     try:
-        await delete_message(db, message_id=message_id, caller_id=current.user_id)
+        await delete_message(db, redis, message_id=message_id, caller_id=current.user_id)
     except MessageNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_MESSAGE_NOT_FOUND_DETAIL
@@ -379,6 +387,7 @@ async def send_dm_message_route(
     payload: _Payload,
     current: _CurrentUser,
     db: _DbSession,
+    _rate_limit_guard: Annotated[None, Depends(enforce_message_send_rate_limit)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> Any:
     """`POST /v1/dms/{user_id}/messages` (T22) — `user_id` is the recipient.
