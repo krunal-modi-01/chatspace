@@ -1,10 +1,51 @@
-"""Channel message send/edit/delete/history business logic (T21, F38-F45).
+"""Channel + DM message send/history business logic (T21/T22, F38-F48).
 
 Persist-only: this module never publishes a WS event or Redis pub/sub
 message (`message.created`/`edited`/`deleted`) — that fan-out is T24's
 scope. Every function here does exactly the durable-state half of the
-frozen contract's four endpoints and returns plain ORM rows for
+frozen contract's endpoints and returns plain ORM rows for
 `app.api.messages` to serialize.
+
+## T22 — DM send/history (built on T21's shared send/idempotency helper)
+
+`send_dm_message`/`get_dm_message_history` are the DM-shaped siblings of
+`send_channel_message`/`get_channel_message_history`. Per the T22 task,
+this reuses T21's send/idempotency helper rather than re-deriving its
+own: the claim/resolve/insert loop that used to live inline inside
+`send_channel_message` is now the shared `_claim_and_persist_message`
+helper both callers invoke, keyed identically on `(sender_id,
+idempotency_key)` — the frozen contract does not namespace idempotency by
+conversation, so this is not a T22-specific behavior change, just the
+existing single-namespace semantics factored out so the loop is not
+duplicated.
+
+DM row shape: `recipient_id` set, `channel_id` NULL (ADR-0002, the
+`messages` table's `ck_messages_target_xor`). Business-rule gates
+specific to DMs:
+
+- Self-DM (`recipient_id == sender_id`) -> `SelfDMError`, `422` (the
+  contract is explicit this is NOT the `404` a missing/inactive recipient
+  gets).
+- Missing or inactive recipient -> `RecipientNotFoundError`, `404`. This
+  is an application-logic invariant only — the frozen DB design does not
+  model recipient existence/active-state as a constraint (the shipped
+  `ck_messages_target_xor` only backstops the self-DM case as
+  defense-in-depth, not the primary `422` path).
+
+DM history is keyed on the canonical *unordered* user pair
+(`least(sender_id, recipient_id)`, `greatest(sender_id, recipient_id)`),
+exactly the expression the shipped partial+functional
+`ix_messages_dm_history` index is built on
+(`alembic/versions/0001_initial_schema.py`) — `get_dm_message_history`'s
+`WHERE` clause uses the identical `func.least`/`func.greatest` shape so it
+keeps hitting that index rather than silently falling back to a seq
+scan. Participant authorization for both DM endpoints
+(`_reject_self_dm` + `_ensure_active_recipient_exists` for send,
+`_ensure_dm_history_participant` for history) never trusts the caller's
+own claim: the caller is always one of the two ids by construction of the
+route (JWT subject + path `user_id`), so the only extra checks are the
+self-conversation reject and the other participant's existence (history,
+uniform `404`) or existence+active-state (send, `404`).
 
 ## Idempotency mechanism (F40) — Redis-backed key -> message-id map
 
@@ -82,13 +123,15 @@ change is authorized without a fresh architect sign-off.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
 
 from redis.asyncio import Redis
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -97,6 +140,7 @@ from app.core.pagination import CursorKey, Page, apply_keyset, paginate_rows
 from app.models.attachment import Attachment
 from app.models.channel import Channel
 from app.models.message import Message
+from app.models.user import User
 from app.services.channels import get_membership
 
 # Generous replay window — long enough that a client retrying a genuinely
@@ -155,6 +199,24 @@ class NotMessageAuthorError(Exception):
 
 class MessageAlreadyDeletedError(Exception):
     """Edit rejected because the message is already soft-deleted — `409` (F39)."""
+
+
+class RecipientNotFoundError(Exception):
+    """DM recipient does not exist, or exists but `is_active` is false — `404` (T22).
+
+    Deliberately non-enumerating (never discloses which sub-case
+    applies), matching the frozen contract's single `404` line for this
+    condition: "Recipient does not exist or is inactive."
+    """
+
+
+class SelfDMError(Exception):
+    """`user_id` (path) equals the caller's own id — self-DM is rejected, `422` (T22).
+
+    Called out explicitly by the frozen contract as NOT the `404` a
+    missing/inactive recipient gets, so this is deliberately a distinct
+    exception from `RecipientNotFoundError` rather than a sub-case of it.
+    """
 
 
 class IdempotencyResolutionTimeoutError(Exception):
@@ -451,11 +513,81 @@ async def ensure_channel_and_membership(
 
 @dataclass(frozen=True, slots=True)
 class SendMessageResult:
-    """Outcome of `send_channel_message` — `created=False` means idempotent replay."""
+    """Outcome of `send_channel_message`/`send_dm_message` — `created=False` means replay."""
 
     message: Message
     media: list[Attachment]
     created: bool
+
+
+async def _claim_and_persist_message(
+    db: AsyncSession,
+    redis: Redis,
+    *,
+    sender_id: UUID,
+    idempotency_key: str,
+    media_ids: list[UUID],
+    build_message: Callable[[UUID], Message],
+) -> SendMessageResult:
+    """Shared claim/resolve/insert loop behind both `send_channel_message` and
+    `send_dm_message` (T21's send/idempotency helper, reused verbatim by T22
+    rather than re-derived).
+
+    Callers have already resolved any pre-existing claim (short-circuiting
+    a plain replay before running their own business validation — see
+    `send_channel_message`/`send_dm_message`) and validated everything
+    business-rule-wise that must happen before a row is ever created. This
+    function owns only the generic part: generate the message id, race to
+    claim `(sender_id, idempotency_key)` in Redis, build+persist the row
+    via `build_message` (channel- or DM-shaped) on a win, or resolve the
+    concurrent winner's row on a loss — bounded by `_CLAIM_MAX_ROUNDS`,
+    fail-closed via `IdempotencyResolutionTimeoutError` if it never
+    settles. See the module docstring for the full race-safety rationale.
+    """
+
+    message_id = generate_id()
+
+    for _round in range(_CLAIM_MAX_ROUNDS):
+        claimed = await _claim_idempotency_key(
+            redis, sender_id=sender_id, idempotency_key=idempotency_key, message_id=message_id
+        )
+        if claimed:
+            try:
+                message = build_message(message_id)
+                db.add(message)
+                await db.flush()
+
+                bound_media = await _bind_media_atomically(
+                    db, message_id=message.id, media_ids=media_ids, sender_id=sender_id
+                )
+
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                await _release_idempotency_key(
+                    redis, sender_id=sender_id, idempotency_key=idempotency_key
+                )
+                raise
+
+            return SendMessageResult(message=message, media=bound_media, created=True)
+
+        # Lost the claim race to a concurrent identical request. Resolve
+        # the winner's row (bounded retries inside `_resolve_existing_claim`)
+        # rather than ever falling through to a blind insert — this is the
+        # F40 fix. `None` here means the key disappeared between the failed
+        # claim above and now (the winner's own insert failed and it
+        # released the key) — loop back and attempt the claim ourselves.
+        resolved = await _resolve_existing_claim(
+            db, redis, sender_id=sender_id, idempotency_key=idempotency_key
+        )
+        if resolved is not None:
+            message, media = resolved
+            return SendMessageResult(message=message, media=media, created=False)
+
+    raise IdempotencyResolutionTimeoutError(
+        f"could not claim or resolve the idempotency key for sender "
+        f"{sender_id} within {_CLAIM_MAX_ROUNDS} claim/resolve rounds."
+    )
 
 
 async def send_channel_message(
@@ -496,54 +628,200 @@ async def send_channel_message(
     # `_bind_media_atomically` below, run inside the send transaction.
     await _validate_and_load_media(db, media_ids=media_ids, sender_id=sender_id)
 
-    message_id = generate_id()
-
-    for _round in range(_CLAIM_MAX_ROUNDS):
-        claimed = await _claim_idempotency_key(
-            redis, sender_id=sender_id, idempotency_key=idempotency_key, message_id=message_id
+    def _build_channel_message(message_id: UUID) -> Message:
+        return Message(
+            id=message_id,
+            channel_id=channel_id,
+            recipient_id=None,
+            sender_id=sender_id,
+            content=content,
         )
-        if claimed:
-            try:
-                message = Message(
-                    id=message_id,
-                    channel_id=channel_id,
-                    recipient_id=None,
-                    sender_id=sender_id,
-                    content=content,
-                )
-                db.add(message)
-                await db.flush()
 
-                bound_media = await _bind_media_atomically(
-                    db, message_id=message.id, media_ids=media_ids, sender_id=sender_id
-                )
+    return await _claim_and_persist_message(
+        db,
+        redis,
+        sender_id=sender_id,
+        idempotency_key=idempotency_key,
+        media_ids=media_ids,
+        build_message=_build_channel_message,
+    )
 
-                await db.commit()
-            except Exception:
-                await db.rollback()
-                await _release_idempotency_key(
-                    redis, sender_id=sender_id, idempotency_key=idempotency_key
-                )
-                raise
 
-            return SendMessageResult(message=message, media=bound_media, created=True)
+async def _reject_self_dm(*, recipient_id: UUID, sender_id: UUID) -> None:
+    """Shared self-DM gate for both DM send and history — `422`, never `404` (T22).
 
-        # Lost the claim race to a concurrent identical request. Resolve
-        # the winner's row (bounded retries inside `_resolve_existing_claim`)
-        # rather than ever falling through to a blind insert — this is the
-        # F40 fix. `None` here means the key disappeared between the failed
-        # claim above and now (the winner's own insert failed and it
-        # released the key) — loop back and attempt the claim ourselves.
-        resolved = await _resolve_existing_claim(
-            db, redis, sender_id=sender_id, idempotency_key=idempotency_key
+    The frozen contract calls this out explicitly: "self-DM is rejected"
+    under send's `422` line, and history's `422` line is "`user_id` ==
+    caller (no self-conversation)". Checked before any recipient
+    existence/active-state lookup so a self-DM never falls through to the
+    `404` path (the caller's own id trivially exists and is active, so the
+    two checks would never actually collide in practice — this ordering
+    just matches the contract's explicit carve-out precisely).
+    """
+
+    if recipient_id == sender_id:
+        raise SelfDMError(f"{sender_id} cannot DM themself.")
+
+
+async def _ensure_active_recipient_exists(db: AsyncSession, *, recipient_id: UUID) -> None:
+    """`404` gate for DM send: recipient must exist and be `is_active` (T22).
+
+    Application-logic invariant only — the frozen DB design does not model
+    recipient existence/active-state as a constraint; the shipped
+    `ck_messages_target_xor`'s `recipient_id <> sender_id` clause is
+    defense-in-depth for the self-DM case, not this check.
+    """
+
+    recipient = await db.get(User, recipient_id)
+    if recipient is None or not recipient.is_active:
+        raise RecipientNotFoundError(f"No active recipient {recipient_id}.")
+
+
+async def _ensure_dm_history_participant_exists(db: AsyncSession, *, other_user_id: UUID) -> None:
+    """`404` gate for DM history: the other participant must exist — uniform, T22.
+
+    Unlike send's gate, the frozen contract's history `404` line ("Other
+    participant does not exist (uniform)") does not additionally require
+    `is_active` — a deactivated user's past DM history remains readable by
+    the still-active counterpart, matching how channel message history
+    stays visible after a member departs.
+    """
+
+    other = await db.get(User, other_user_id)
+    if other is None:
+        raise RecipientNotFoundError(f"No such user {other_user_id}.")
+
+
+async def send_dm_message(
+    db: AsyncSession,
+    redis: Redis,
+    *,
+    recipient_id: UUID,
+    sender_id: UUID,
+    content: str,
+    media_ids: list[UUID],
+    idempotency_key: str,
+) -> SendMessageResult:
+    """Persist a new DM (`recipient_id` set, `channel_id` NULL), or return a replay (T22).
+
+    Raises `SelfDMError` (`422`) / `RecipientNotFoundError` (`404`) /
+    `InvalidContentError` (`422`) / `InvalidMediaError` (`422`) for the
+    route layer to map per the frozen contract, or
+    `IdempotencyResolutionTimeoutError` (fail-closed, `503`) exactly as
+    `send_channel_message` does — see `_claim_and_persist_message`, the
+    shared T21 helper this reuses. Never publishes a WS/Redis fan-out
+    event (T24's scope) — persist only.
+    """
+
+    resolved = await _resolve_existing_claim(
+        db, redis, sender_id=sender_id, idempotency_key=idempotency_key
+    )
+    if resolved is not None:
+        message, media = resolved
+        return SendMessageResult(message=message, media=media, created=False)
+
+    await _reject_self_dm(recipient_id=recipient_id, sender_id=sender_id)
+    await _ensure_active_recipient_exists(db, recipient_id=recipient_id)
+
+    if not is_valid_content(content):
+        raise InvalidContentError("content must be 1-4000 non-whitespace characters.")
+
+    await _validate_and_load_media(db, media_ids=media_ids, sender_id=sender_id)
+
+    def _build_dm_message(message_id: UUID) -> Message:
+        return Message(
+            id=message_id,
+            channel_id=None,
+            recipient_id=recipient_id,
+            sender_id=sender_id,
+            content=content,
         )
-        if resolved is not None:
-            message, media = resolved
-            return SendMessageResult(message=message, media=media, created=False)
 
-    raise IdempotencyResolutionTimeoutError(
-        f"could not claim or resolve the idempotency key for sender "
-        f"{sender_id} within {_CLAIM_MAX_ROUNDS} claim/resolve rounds."
+    return await _claim_and_persist_message(
+        db,
+        redis,
+        sender_id=sender_id,
+        idempotency_key=idempotency_key,
+        media_ids=media_ids,
+        build_message=_build_dm_message,
+    )
+
+
+async def ensure_dm_history_access(
+    db: AsyncSession, *, other_user_id: UUID, caller_id: UUID
+) -> None:
+    """Shared `422`/`404` gate for `GET /v1/dms/{user_id}/messages` (T22).
+
+    Checked in the contract's exact order: self-conversation (`422`)
+    before the other participant's existence (`404`) — mirrors
+    `ensure_channel_and_membership`'s existence-before-authorization
+    pattern, adapted to DM history's two distinct gates. The caller is
+    always one of the two participants by construction of the route (JWT
+    subject + path `user_id`), so no separate participant-membership
+    lookup is needed beyond these two checks.
+    """
+
+    await _reject_self_dm(recipient_id=other_user_id, sender_id=caller_id)
+    await _ensure_dm_history_participant_exists(db, other_user_id=other_user_id)
+
+
+def _dm_pair(user_a_id: UUID, user_b_id: UUID) -> tuple[UUID, UUID]:
+    """Canonical `(least, greatest)` ordering of an unordered DM pair (ADR-0002).
+
+    Must match `ix_messages_dm_history`'s `least(sender_id,
+    recipient_id)`/`greatest(...)` functional-index expression exactly
+    (and `app.core.redis_keys.dm_topic`'s identical ordering) or
+    `get_dm_message_history`'s query stops hitting that index.
+    """
+
+    return (user_a_id, user_b_id) if user_a_id <= user_b_id else (user_b_id, user_a_id)
+
+
+async def get_dm_message_history(
+    db: AsyncSession,
+    *,
+    caller_id: UUID,
+    other_user_id: UUID,
+    limit: int,
+    cursor: CursorKey | None,
+) -> Page[Message]:
+    """Cursor-paginated, soft-delete-excluding DM history (F48, T22).
+
+    Caller must already have resolved `limit`/`cursor` (via
+    `app.core.pagination.resolve_limit`/`decode_cursor`) and confirmed
+    `ensure_dm_history_access` before calling this. Queries via the exact
+    keyset shape the frozen, functional `ix_messages_dm_history` partial
+    index requires: `WHERE least(sender_id,recipient_id) = ? AND
+    greatest(sender_id,recipient_id) = ? AND recipient_id IS NOT NULL AND
+    deleted_at IS NULL AND (created_at, id) < (?, ?) ORDER BY created_at
+    DESC, id DESC LIMIT n`.
+    """
+
+    least_id, greatest_id = _dm_pair(caller_id, other_user_id)
+    least_expr = func.least(Message.sender_id, Message.recipient_id, type_=PGUUID(as_uuid=True))
+    greatest_expr = func.greatest(
+        Message.sender_id, Message.recipient_id, type_=PGUUID(as_uuid=True)
+    )
+
+    stmt = select(Message).where(
+        Message.recipient_id.is_not(None),
+        Message.deleted_at.is_(None),
+        least_expr == least_id,
+        greatest_expr == greatest_id,
+    )
+    stmt = apply_keyset(
+        stmt,
+        created_at_col=Message.__table__.c.created_at,
+        id_col=Message.__table__.c.id,
+        cursor=cursor,
+    )
+    stmt = stmt.limit(limit + 1)
+
+    result = await db.execute(stmt)
+    rows = list(result.scalars().all())
+
+    return paginate_rows(
+        rows, limit=limit, cursor_key=lambda m: CursorKey(created_at=m.created_at, id=m.id)
     )
 
 

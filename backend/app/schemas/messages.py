@@ -1,4 +1,11 @@
-"""Pydantic schemas for `/v1/channels/{id}/messages` + `/v1/messages/{id}` (T21).
+"""Pydantic schemas for `/v1/channels/{id}/messages` + `/v1/messages/{id}` (T21)
+and `/v1/dms/{user_id}/messages` (T22).
+
+T22 reuses every schema here unchanged: `MessageSendRequest` is the DM
+send body too (`content` + `media_ids`), and `MessageObject`/
+`MessageHistoryResponse` are already the canonical wire shape for a
+`recipient_id`-set (DM) row exactly as much as a `channel_id`-set
+(channel) row — no new schema needed for the DM endpoints.
 
 `MessageSendRequest`/`MessageEditRequest` are validated manually via
 `app.core.request_body.parse_body` (not typed FastAPI body parameters),
@@ -67,8 +74,10 @@ class MediaDescriptor(BaseModel):
 class MessageObject(BaseModel):
     """The canonical `message` object (frozen contract's wire shape).
 
-    Channel-message case: `recipient_id` is always `null` here — DM
-    messages (`recipient_id` set) are T22's concern, out of scope for T21.
+    Exactly one of `channel_id`/`recipient_id` is set per the shipped
+    `ck_messages_target_xor` (ADR-0002): `channel_id` set + `recipient_id
+    null` for a channel message (T21), `recipient_id` set + `channel_id
+    null` for a DM (T22).
     """
 
     id: UUID
