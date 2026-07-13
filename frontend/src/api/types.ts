@@ -171,6 +171,41 @@ export interface ListMessagesParams {
 }
 
 // ---------------------------------------------------------------------------
+// Messaging UI (T32) — send/edit/delete + channel-member identity lookup.
+// ---------------------------------------------------------------------------
+
+/** Body of `POST /v1/channels/{channel_id}/messages`. `Idempotency-Key` is a
+ * required header (client-generated UUID), not a body field — see
+ * `sendChannelMessage` in `messagesApi.ts`. */
+export interface SendMessageRequest {
+  content: string;
+  media_ids?: string[];
+}
+
+/** Body of `PATCH /v1/messages/{message_id}` (author-only edit). */
+export interface EditMessageRequest {
+  content: string;
+}
+
+/** One row of `GET /v1/channels/{channel_id}/members` — the only identity
+ * source for a message's `sender_id` in T32 scope (no dedicated user-lookup
+ * endpoint). `role`/values are an open set — tolerate unknown values. */
+export interface ChannelMemberSummary {
+  user_id: string;
+  username: string;
+  first_name: string;
+  last_name: string;
+  avatar_url: string | null;
+  role: string;
+  joined_at: string;
+}
+
+export interface ChannelMemberListResponse {
+  items: ChannelMemberSummary[];
+  total: number;
+}
+
+// ---------------------------------------------------------------------------
 // Admin surfaces (T45/T46) — invite management + user management.
 // ---------------------------------------------------------------------------
 
