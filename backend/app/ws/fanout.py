@@ -9,12 +9,20 @@ sent on one instance reaches a client connected to a different instance
 — "cross-instance delivery with no session affinity" (F53).
 
 `PubSubRelay` is that subscriber: one Redis pattern-subscription
-(`chan:*` + `dm:*`) per process, rather than one Redis subscription per
-joined topic — simpler to run and to reason about at chatspace's scale
-(CLAUDE.md: "a couple of app instances", no cluster), and it means a
-connection joining/leaving a topic is pure in-process bookkeeping
-(`ConnectionManager.subscribe`/`unsubscribe`) with no matching Redis
-`SUBSCRIBE`/`UNSUBSCRIBE` round-trip needed.
+(`chan:*` + `dm:*` + `presence:*`) per process, rather than one Redis
+subscription per joined topic — simpler to run and to reason about at
+chatspace's scale (CLAUDE.md: "a couple of app instances", no cluster),
+and it means a connection joining/leaving a topic is pure in-process
+bookkeeping (`ConnectionManager.subscribe`/`unsubscribe`) with no
+matching Redis `SUBSCRIBE`/`UNSUBSCRIBE` round-trip needed.
+
+`presence:*` (T25, `app.core.redis_keys.presence_topic`) rides this same
+relay so a `presence` online/offline event fans out cross-instance
+exactly like `message.*` (F53) — it does not overlap with the *other*
+`presence:`-prefixed Redis keys (`presence:conn_count:*`,
+`presence:state:*`, `presence:typing:*`): those are plain GET/SET/EXPIRE
+keys, never `PUBLISH`ed to, so they never arrive here regardless of this
+pattern subscription.
 
 Delivery here is the live half of the contract's at-least-once model —
 a relay that is down, restarting, or briefly disconnected from Redis
@@ -40,21 +48,54 @@ import asyncio
 import contextlib
 import json
 import logging
+from typing import Any
+from uuid import UUID
 
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
 
 from app.ws.connection_manager import ConnectionManager, connection_manager
+from app.ws.typing_events import TYPING_EVENT_TYPE
 
 logger = logging.getLogger(__name__)
 
-# One pattern subscription covers every channel/DM topic
-# (`app.core.redis_keys.channel_topic`/`dm_topic`) without the relay
-# needing to track which literal topics currently have a joined local
-# connection — `ConnectionManager.broadcast_to_topic` already filters to
-# only the topics with a live subscriber.
+def _typing_typer_id(payload: dict[str, Any]) -> UUID | None:
+    """Extract the typer's `user_id` from a `typing` envelope, else `None`.
+
+    Only `typing` events are self-excluded (T26) — `message.*` and any
+    other event type pass `None` through untouched, so
+    `ConnectionManager.broadcast_to_topic` delivers to every subscriber
+    including the sender, unchanged from T24's behavior. Malformed/
+    missing fields degrade to `None` (no exclusion) rather than dropping
+    the event — a typer occasionally seeing their own echoed typing
+    indicator is a harmless UI glitch, not worth failing the relay over.
+    """
+
+    if payload.get("type") != TYPING_EVENT_TYPE:
+        return None
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+
+    user_id = data.get("user_id")
+    if not isinstance(user_id, str):
+        return None
+
+    try:
+        return UUID(user_id)
+    except ValueError:
+        return None
+
+
+# One pattern subscription covers every channel/DM/presence topic
+# (`app.core.redis_keys.channel_topic`/`dm_topic`/`presence_topic`)
+# without the relay needing to track which literal topics currently have
+# a joined local connection — `ConnectionManager.broadcast_to_topic`
+# already filters to only the topics with a live subscriber.
 _CHANNEL_PATTERN = "chan:*"
 _DM_PATTERN = "dm:*"
+_PRESENCE_PATTERN = "presence:*"
 
 # How long a single `get_message` poll blocks waiting for the next
 # fan-out event before returning `None` and looping again. Bounds how
@@ -140,7 +181,7 @@ class PubSubRelay:
 
         try:
             self._pubsub = self._redis.pubsub()
-            await self._pubsub.psubscribe(_CHANNEL_PATTERN, _DM_PATTERN)
+            await self._pubsub.psubscribe(_CHANNEL_PATTERN, _DM_PATTERN, _PRESENCE_PATTERN)
             return True
         except asyncio.CancelledError:
             raise
@@ -211,4 +252,6 @@ class PubSubRelay:
             )
             return
 
-        await self._manager.broadcast_to_topic(topic, payload)
+        await self._manager.broadcast_to_topic(
+            topic, payload, exclude_user_id=_typing_typer_id(payload)
+        )

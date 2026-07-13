@@ -175,6 +175,26 @@ class Settings(BaseSettings):
         description="Sliding window (seconds) `ws_frame_rate_limit_max_frames` is measured over.",
     )
 
+    # --- Presence (T25, F49-F50) --------------------------------------------
+    presence_ttl_seconds: int = Field(
+        default=120,
+        gt=0,
+        description=(
+            "TTL (seconds) on a user's Redis presence ref-count key "
+            "(`app.core.redis_keys.presence_connection_count_key`). Refreshed on "
+            "every connect and client heartbeat, so a live connection's presence "
+            "contribution never expires while pings keep arriving. Set "
+            "comfortably above `ws_heartbeat_timeout_seconds` (default 45s) so "
+            "the ordinary, orderly reap-with-4408-then-decrement path always "
+            "wins the race, and TTL expiry is reserved for the one failure mode "
+            "a graceful per-connection decrement cannot cover: the whole app "
+            "instance crashing before its `finally`-block disconnect handler "
+            "ever runs. This is also why a full Redis restart can never leave a "
+            "user falsely `online` (F49/F50): the counter key does not survive "
+            "the restart at all, let alone outlive this TTL."
+        ),
+    )
+
     # --- SMTP / transactional email (ADR-0010) ------------------------------
     smtp_host: str = Field(..., description="SMTP server host.")
     smtp_port: int = Field(..., gt=0, le=65535, description="SMTP server port.")
