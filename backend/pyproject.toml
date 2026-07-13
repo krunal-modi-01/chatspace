@@ -23,6 +23,13 @@ dependencies = [
     "bcrypt<4.1.0",
     "boto3>=1.35.0",
     "aiosmtplib>=3.0.2",
+    # T28 media pipeline: EXIF-strip-or-reject for images (ADR-0007 names
+    # Pillow explicitly as the mechanism) and multipart/form-data parsing
+    # for `POST /v1/media` (FastAPI's sole supported multipart backend --
+    # not a discretionary alternative; the frozen contract mandates
+    # multipart/form-data for this endpoint).
+    "Pillow>=10.4.0",
+    "python-multipart>=0.0.12",
 ]
 
 [dependency-groups]

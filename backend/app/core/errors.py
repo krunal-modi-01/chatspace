@@ -36,6 +36,7 @@ from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.body_limit import BodyTooLargeError
 from app.core.correlation import HEADER_NAME, get_correlation_id
 from app.core.pagination import PaginationError
 from app.core.password_policy import PasswordPolicyError
@@ -330,6 +331,23 @@ async def rate_limit_unavailable_handler(request: Request, exc: Exception) -> JS
     return response
 
 
+async def body_too_large_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Turn a `BodyTooLargeError` into the frozen `413` problem+json shape (T28 HIGH-1).
+
+    Raised by `app.core.body_limit.MaxBodySizeMiddleware` when a streamed
+    request body's cumulative size crosses the global ceiling *before*
+    Starlette's multipart/body parser can buffer the whole thing to
+    memory/disk -- see that module's docstring. Never logs body content.
+    """
+
+    assert isinstance(exc, BodyTooLargeError)
+    return _problem_response(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        detail="Request body exceeds the maximum allowed size.",
+        instance=request.url.path,
+    )
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     # Never leak internals (stack traces, exception messages) into the response;
     # the correlation id is the join key back to the (separately logged) detail.
@@ -369,4 +387,5 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(PaginationError, pagination_error_handler)
     app.add_exception_handler(RateLimitExceededError, rate_limit_exceeded_handler)
     app.add_exception_handler(RateLimitUnavailableError, rate_limit_unavailable_handler)
+    app.add_exception_handler(BodyTooLargeError, body_too_large_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)

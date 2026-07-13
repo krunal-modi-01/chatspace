@@ -19,14 +19,16 @@ T18 adds `/v1/channels*` (create/get/public browse, `app.api.channels`).
 T44 adds `/v1/admin/*` (System Admin user directory + deactivate/
 reactivate, `app.api.admin`). T21 adds `/v1/channels/{id}/messages` +
 `/v1/messages/{id}` (channel message send/edit/delete/history,
-`app.api.messages`, persist-only — fan-out is T24).
+`app.api.messages`, persist-only — fan-out is T24). T28 adds
+`/v1/media` + `/v1/media/{id}/url` (upload/validate/sniff/EXIF-strip/
+store + presigned GET, `app.api.media`).
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import admin, auth, channels, health, invites, me, messages, password, sessions
+from app.api import admin, auth, channels, health, invites, me, media, messages, password, sessions
 
 api_router = APIRouter(prefix="/v1")
 api_router.include_router(health.router)
@@ -37,4 +39,5 @@ api_router.include_router(me.router)
 api_router.include_router(invites.router)
 api_router.include_router(channels.router)
 api_router.include_router(messages.router)  # T21 channels/messages + T22 dms/messages
+api_router.include_router(media.router)  # T28 media upload + presigned fetch
 api_router.include_router(admin.router)
