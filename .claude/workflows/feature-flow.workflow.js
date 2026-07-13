@@ -24,7 +24,7 @@ const specLink = A?.specLink ?? 'docs/spec/chatspace-v1-technical-spec.md'
 const contractDoc = A?.contractDoc ?? 'docs/spec/chatspace-v1-api-contract.md'
 const dbDesignDoc = A?.dbDesignDoc ?? 'docs/spec/chatspace-v1-database-design.md'
 const tasks = A?.tasks ?? []
-const RUN_SECURITY = A?.security ?? false // TEMP: security review disabled — flip to true (or pass security:true) to re-enable
+const RUN_SECURITY = A?.security ?? true // toggle the Verify phase (default: true)
 
 // Map task kind → canonical roster agent (see CLAUDE.md AGENT ROSTER).
 const ENGINEER = {
