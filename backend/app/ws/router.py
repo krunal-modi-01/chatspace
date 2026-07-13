@@ -1,4 +1,4 @@
-"""`WebSocket /v1/ws` — the T23 connection manager endpoint.
+"""`WebSocket /v1/ws` — the T23 connection manager endpoint (+T26 typing relay).
 
 Implements, per the frozen API contract (T23 slice) and F51-F56:
 
@@ -18,10 +18,13 @@ Implements, per the frozen API contract (T23 slice) and F51-F56:
   4408; this keeps periodic revalidation from being dodged by a client
   that never pings again after the first one.
 - **Frame-rate abuse guard** — `FrameRateLimiter` closes with 4429 on an
-  abusive frame rate.
+  abusive frame rate; this is the hook an abusive `typing` frame rate
+  (T26) trips, same as any other frame type — there is no separate
+  per-frame-type limit.
 - **Per-connection subscription bookkeeping** — `connection_manager`
-  tracks which topics a connection has joined; no Redis fan-out payload
-  is published here (T24).
+  tracks which topics a connection has joined; `message.*` fan-out
+  publishing itself lives in `app.services.messages`/`message_events`
+  (T24), not here.
 - **Presence lifecycle (T25, F49-F50)** — `app.services.presence.handle_connect`
   ref-counts this connection right after it registers, `handle_heartbeat`
   renews its TTL on every client `ping` (alongside revalidation), and
@@ -30,11 +33,17 @@ Implements, per the frozen API contract (T23 slice) and F51-F56:
   and a 4408 heartbeat-timeout reap alike — so every disconnect path
   decrements the ref-count and, on the last one, durably persists
   `users.last_seen` and emits the `offline` presence event.
-
-Explicitly out of scope here (T26): `typing` delivery to other clients.
-`typing` frames are accepted and deliberately no-op'd rather than
-rejected, so a client that already speaks the full contract doesn't get
-spurious `error` frames for a frame type this task doesn't yet act on.
+- **`typing` relay (T26)** — a `typing` frame re-runs the same
+  membership/participant re-check `join` does
+  (`app.ws.conversations.authorize_conversation`; unauthorized -> a
+  non-fatal `error` frame, socket stays open) and, if authorized,
+  publishes the frozen `typing` envelope (`app.ws.typing_events`) to the
+  conversation's canonical topic so `app.ws.fanout.PubSubRelay` relays
+  it to *other* participants' connections only (never back to the
+  typer's own connection(s)). Relay-only: nothing is persisted, and the
+  client alone is responsible for the 5s auto-expire of the indicator
+  since the last received `typing` frame (F56) — there is deliberately
+  no explicit stop frame.
 """
 
 from __future__ import annotations
@@ -80,6 +89,7 @@ from app.ws.frames import (
     pong_frame,
 )
 from app.ws.rate_limit import FrameRateLimiter
+from app.ws.typing_events import build_typing_event, publish_typing_event
 
 logger = logging.getLogger(__name__)
 
@@ -333,8 +343,24 @@ async def _connection_loop(
             continue
 
         if isinstance(frame, TypingFrame):
-            # Typing delivery is T26 scope; accepted and intentionally a
-            # no-op here so it doesn't trip the "unknown frame" error path.
+            # Same re-check `join` runs — never trust a client-supplied
+            # channel_id/user_id alone (CLAUDE.md security requirements;
+            # design note: typing fan-out scoping reuses the same
+            # membership/participant model the message path enforces).
+            async with _db_session() as db:
+                result = await authorize_conversation(
+                    db, conversation=frame.conversation, caller_id=auth.user_id
+                )
+            if not result.authorized:
+                assert result.error_code is not None
+                assert result.error_detail is not None
+                await _safe_send_json(
+                    websocket, error_frame(code=result.error_code, detail=result.error_detail)
+                )
+                continue
+            assert result.topic is not None
+            event = build_typing_event(user_id=auth.user_id, conversation=frame.conversation)
+            await publish_typing_event(redis, event, topic=result.topic)
             continue
 
 

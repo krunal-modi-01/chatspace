@@ -48,13 +48,45 @@ import asyncio
 import contextlib
 import json
 import logging
+from typing import Any
+from uuid import UUID
 
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
 
 from app.ws.connection_manager import ConnectionManager, connection_manager
+from app.ws.typing_events import TYPING_EVENT_TYPE
 
 logger = logging.getLogger(__name__)
+
+def _typing_typer_id(payload: dict[str, Any]) -> UUID | None:
+    """Extract the typer's `user_id` from a `typing` envelope, else `None`.
+
+    Only `typing` events are self-excluded (T26) — `message.*` and any
+    other event type pass `None` through untouched, so
+    `ConnectionManager.broadcast_to_topic` delivers to every subscriber
+    including the sender, unchanged from T24's behavior. Malformed/
+    missing fields degrade to `None` (no exclusion) rather than dropping
+    the event — a typer occasionally seeing their own echoed typing
+    indicator is a harmless UI glitch, not worth failing the relay over.
+    """
+
+    if payload.get("type") != TYPING_EVENT_TYPE:
+        return None
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+
+    user_id = data.get("user_id")
+    if not isinstance(user_id, str):
+        return None
+
+    try:
+        return UUID(user_id)
+    except ValueError:
+        return None
+
 
 # One pattern subscription covers every channel/DM/presence topic
 # (`app.core.redis_keys.channel_topic`/`dm_topic`/`presence_topic`)
@@ -220,4 +252,6 @@ class PubSubRelay:
             )
             return
 
-        await self._manager.broadcast_to_topic(topic, payload)
+        await self._manager.broadcast_to_topic(
+            topic, payload, exclude_user_id=_typing_typer_id(payload)
+        )

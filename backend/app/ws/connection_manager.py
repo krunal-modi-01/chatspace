@@ -102,7 +102,13 @@ class ConnectionManager:
     def __len__(self) -> int:
         return len(self._connections)
 
-    async def broadcast_to_topic(self, topic: str, payload: dict[str, object]) -> None:
+    async def broadcast_to_topic(
+        self,
+        topic: str,
+        payload: dict[str, object],
+        *,
+        exclude_user_id: UUID | None = None,
+    ) -> None:
         """Relay `payload` to every local connection currently subscribed to `topic`.
 
         Called once per received fan-out message by
@@ -112,10 +118,21 @@ class ConnectionManager:
         skipped rather than aborting delivery to every other subscribed
         connection. `payload` must already be the exact wire envelope
         (no further transformation happens here).
+
+        `exclude_user_id`, when set, skips *every* connection belonging
+        to that user (all of their tabs/instances, not just the one
+        connection that produced the event) — used for the `typing`
+        event (T26), which must reach other participants only, never
+        the typer's own connection(s) (contract: "fans out ... to other
+        participants of the same channel/DM only"). `message.*` events
+        pass no exclusion — the sender's own connection is a legitimate
+        recipient there.
         """
 
         for state in list(self._connections.values()):
             if topic not in state.subscribed_topics:
+                continue
+            if exclude_user_id is not None and state.user_id == exclude_user_id:
                 continue
             if state.websocket.application_state != WebSocketState.CONNECTED:
                 continue
