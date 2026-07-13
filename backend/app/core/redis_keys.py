@@ -72,6 +72,24 @@ def presence_state_key(user_id: UUID | str) -> str:
     return f"presence:state:{user_id}"
 
 
+def presence_topic(user_id: UUID | str) -> str:
+    """Return the pub/sub topic a user's `presence` online/offline events publish to.
+
+    Canonical shape: `presence:{user_id}` (T25, ADR-0004's "presence ...
+    published ... to a Redis channel" note). Namespaced identically to
+    every other presence key, but this one specifically holds a topic
+    string (like `channel_topic`/`dm_topic`), not a counter/state value —
+    `app.ws.fanout.PubSubRelay` subscribes to `presence:*` alongside
+    `chan:*`/`dm:*` so a presence event fans out cross-instance the same
+    way `message.*` events do (F53), even though the frozen client frame
+    set has no `join`-a-presence-topic frame yet — see
+    `app.services.presence` module docstring for the flagged open
+    question this leaves for api-reviewer.
+    """
+
+    return f"presence:{user_id}"
+
+
 def typing_indicator_key(conversation_topic: str) -> str:
     """Redis key namespacing typing-indicator state for a conversation.
 

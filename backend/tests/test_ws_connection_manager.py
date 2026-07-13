@@ -668,6 +668,101 @@ class TestHeartbeatTimeoutAndRateLimit:
             get_settings.cache_clear()
 
 
+async def _wait_until_last_seen_persisted(
+    db_session: AsyncSession, user: User, *, timeout_seconds: float = 3.0
+) -> None:
+    """Poll `user.last_seen` (via `db_session.refresh`) until it is set.
+
+    The server-side `finally` block (unregister + `presence.handle_disconnect`,
+    including its own commit) runs as a continuation of the same endpoint
+    task on the app's own anyio portal, not synchronously with whatever
+    line of test code triggered the disconnect — so asserting on its
+    committed side effect must poll rather than assume it has already
+    landed the instant the disconnect was sent (same rationale as
+    `test_ws_fanout.py`'s `_wait_until`).
+
+    Callers must poll for this *before* letting
+    `client.websocket_connect`'s `with` block exit naturally: exiting it
+    invokes `WebSocketTestSession.__exit__`, which — after resending a
+    close — cancels the anyio `CancelScope` wrapping the endpoint's ASGI
+    call almost immediately (Starlette `testclient.py`'s
+    `stack.callback(portal.call, cs.cancel)`). In a real deployment
+    nothing ever cancels a connection's task out from under its own
+    `finally` block this way — only this synthetic per-session teardown
+    does — so the disconnect must be triggered and its durable side
+    effect awaited *inside* the `with` block, before that teardown can
+    race it.
+    """
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    while loop.time() < deadline:
+        await db_session.refresh(user)
+        if user.last_seen is not None:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"user {user.id}'s last_seen was not persisted within {timeout_seconds}s")
+
+
+class TestPresenceLifecycle:
+    """End-to-end T25: a live `/v1/ws` connection ref-counts presence and a
+    clean disconnect (or a missed-heartbeat reap) persists `last_seen`.
+
+    Deliberately does not touch `app.db.redis.get_redis_client()` directly
+    from the test body: `TestClient.websocket_connect` runs the app (and
+    thus the process-wide Redis client) on its own anyio portal, and a
+    second, test-owned client bound to *this* test's `pytest-asyncio` loop
+    would race it (`test_ws_fanout.py`'s note on the identical hazard for
+    a two-client setup). Asserting on the durable Postgres `last_seen`
+    write is enough to prove `presence.handle_connect`/`handle_disconnect`
+    actually ran on every connect/disconnect through the real endpoint,
+    without needing to read the app's own in-process Redis client from a
+    different event loop.
+    """
+
+    async def test_clean_disconnect_persists_last_seen(
+        self, migrated_db: None, client: TestClient, db_session: AsyncSession
+    ) -> None:
+        user, _, token = await _authed_user(db_session)
+        assert user.last_seen is None
+
+        with client.websocket_connect(_ws_url(token)) as ws:
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json() == {"type": "pong"}
+
+            # Trigger the client-initiated disconnect and await its durable
+            # side effect *while still inside the `with` block* — see
+            # `_wait_until_last_seen_persisted`'s docstring for why this
+            # must happen before the block's own `__exit__` teardown runs.
+            ws.close()
+            await _wait_until_last_seen_persisted(db_session, user)
+
+    async def test_missed_heartbeat_reap_also_persists_last_seen(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("WS_HEARTBEAT_TIMEOUT_SECONDS", "0.3")
+        get_settings.cache_clear()
+        try:
+            user, _, token = await _authed_user(db_session)
+
+            with client.websocket_connect(_ws_url(token)) as ws:
+                with pytest.raises(WebSocketDisconnect) as exc_info:
+                    ws.receive_json()
+                assert exc_info.value.code == WSCloseCode.HEARTBEAT_TIMEOUT
+
+                # Await the durable side effect while still inside the
+                # `with` block — see `_wait_until_last_seen_persisted`'s
+                # docstring for why this must happen before the block's
+                # own `__exit__` teardown cancels the endpoint's task.
+                await _wait_until_last_seen_persisted(db_session, user)
+        finally:
+            get_settings.cache_clear()
+
+
 class TestServerDrain:
     """Server shutdown/instance drain closes every live connection with 1001."""
 
