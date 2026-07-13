@@ -262,6 +262,28 @@ export interface UpdateChannelMemberRoleRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Messaging UI (T32) — send/edit/delete + channel-member identity lookup.
+// ---------------------------------------------------------------------------
+
+/** Body of `POST /v1/channels/{channel_id}/messages`. `Idempotency-Key` is a
+ * required header (client-generated UUID), not a body field — see
+ * `sendChannelMessage` in `messagesApi.ts`. */
+export interface SendMessageRequest {
+  content: string;
+  media_ids?: string[];
+}
+
+/** Body of `PATCH /v1/messages/{message_id}` (author-only edit). */
+export interface EditMessageRequest {
+  content: string;
+}
+
+/** Alias of `ChannelMember` for T32 (messaging UI) call sites — the only
+ * identity source for a message's `sender_id` (no dedicated user-lookup
+ * endpoint). `role` is an open set — tolerate unknown values. */
+export type ChannelMemberSummary = ChannelMember;
+
+// ---------------------------------------------------------------------------
 // Admin surfaces (T45/T46) — invite management + user management.
 // ---------------------------------------------------------------------------
 

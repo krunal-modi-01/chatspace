@@ -87,12 +87,23 @@ async function doFetch(path: string, options: RequestOptions, accessToken: strin
   });
 }
 
+/** `data` + the HTTP status actually returned — most callers only need
+ * `data` (see `apiRequest` below), but a few (e.g. optimistic message send,
+ * which must distinguish a `201` new row from a `200` idempotent replay per
+ * the frozen contract) need the status too. */
+export interface ApiResult<T> {
+  data: T;
+  status: number;
+}
+
 /**
- * Typed REST client. Injects `Authorization: Bearer` for protected requests,
- * transparently retries once via `/v1/auth/refresh` on a 401, and surfaces
- * every non-2xx response as an `ApiError` carrying a parsed problem+json body.
+ * Typed REST client, status-aware variant. Injects `Authorization: Bearer`
+ * for protected requests, transparently retries once via `/v1/auth/refresh`
+ * on a 401, and surfaces every non-2xx response as an `ApiError` carrying a
+ * parsed problem+json body (plus `retryAfterSeconds` when the server sent a
+ * `Retry-After` header, e.g. a `429` on message send).
  */
-export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export async function apiRequestWithStatus<T>(path: string, options: RequestOptions = {}): Promise<ApiResult<T>> {
   const isRefreshCall = path === REFRESH_PATH;
   let response: Response;
 
@@ -116,12 +127,25 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   }
 
   if (!response.ok) {
-    throw new ApiError(await parseErrorResponse(response, path));
+    const problem = await parseErrorResponse(response, path);
+    const retryAfterHeader = response.headers.get('Retry-After');
+    const retryAfterSeconds = retryAfterHeader !== null ? Number(retryAfterHeader) : undefined;
+    throw new ApiError(problem, retryAfterSeconds !== undefined && Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : undefined);
   }
 
   if (response.status === 204) {
-    return undefined as T;
+    return { data: undefined as T, status: response.status };
   }
 
-  return (await response.json()) as T;
+  return { data: (await response.json()) as T, status: response.status };
+}
+
+/**
+ * Typed REST client. Injects `Authorization: Bearer` for protected requests,
+ * transparently retries once via `/v1/auth/refresh` on a 401, and surfaces
+ * every non-2xx response as an `ApiError` carrying a parsed problem+json body.
+ */
+export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { data } = await apiRequestWithStatus<T>(path, options);
+  return data;
 }

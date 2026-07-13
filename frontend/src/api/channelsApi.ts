@@ -119,3 +119,17 @@ export function removeChannelMember(channelId: string, userId: string): Promise<
     method: 'DELETE',
   });
 }
+
+/**
+ * Alias of `listChannelMembers` for T32 (messaging UI) call sites that only
+ * need the member list to resolve "other user" identity — display
+ * name/initials/avatar — for a message's `sender_id`. There is no dedicated
+ * user-lookup endpoint; the member list (owned by T31) is the only source,
+ * per the frozen contract's explicit guidance.
+ */
+export function fetchChannelMembers(
+  channelId: string,
+  params: ListChannelMembersParams = {},
+): Promise<ChannelMemberListResponse> {
+  return listChannelMembers(channelId, params);
+}

@@ -1,6 +1,7 @@
 import { useState, type JSX } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ErrorBanner } from '../../components/ErrorBanner';
+import { MessageList } from '../../components/chat/MessageList';
 import { AlertBanner } from '../../components/ui/AlertBanner';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
@@ -476,6 +477,15 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
             </Card>
           )}
         </>
+      )}
+
+      {isMember && (
+        <Card className="flex h-[32rem] flex-col">
+          <h2 className="text-subheading text-[var(--color-text-primary)]">Messages</h2>
+          <div className="mt-4 flex-1 overflow-hidden">
+            <MessageList channelId={channelId} />
+          </div>
+        </Card>
       )}
     </div>
   );
