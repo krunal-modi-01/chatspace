@@ -131,6 +131,46 @@ export interface OffsetPage<T> {
 }
 
 // ---------------------------------------------------------------------------
+// Messaging / WebSocket (T33) — channel & DM history + live event payloads.
+// ---------------------------------------------------------------------------
+
+/** Discriminated conversation target shared by REST history lookups, WS
+ * `join`/`leave` frames, and WS event envelopes. */
+export type ConversationTarget =
+  | { kind: 'channel'; channel_id: string }
+  | { kind: 'dm'; user_id: string };
+
+/** `media[]` entry embedded on a message per the frozen contract — no URL,
+ * no dimensions (fetched separately via `GET /v1/media/{media_id}/url`, T28,
+ * out of scope here). */
+export interface MessageMedia {
+  media_id: string;
+  kind: string;
+  filename: string;
+  size: number;
+}
+
+/** A message row as returned by history endpoints and WS
+ * `message.created`/`message.edited` payloads. `id` is a UUIDv7 — the
+ * time-sortable client dedup key and ordering key (F54). */
+export interface Message {
+  id: string;
+  channel_id: string | null;
+  recipient_id: string | null;
+  sender_id: string;
+  content: string;
+  media: MessageMedia[];
+  created_at: string;
+  edited_at: string | null;
+  deleted_at: string | null;
+}
+
+export interface ListMessagesParams {
+  limit?: number;
+  cursor?: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Admin surfaces (T45/T46) — invite management + user management.
 // ---------------------------------------------------------------------------
 

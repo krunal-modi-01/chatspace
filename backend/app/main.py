@@ -1,11 +1,12 @@
 """FastAPI application entrypoint.
 
 Wires: settings (fail-fast on missing secrets), structured JSON logging,
-the correlation-id middleware, the RFC 7807 problem+json error handlers,
-CORS, and the `/v1` base-path router. No business routes, DB models, or
-auth live here — see the package layout in CLAUDE.md for where those
-belong (`app/api`, `app/models`, `app/schemas`, `app/services`, `app/db`,
-`app/core`, `app/ws`).
+the correlation-id middleware, the global request-body-size ceiling, the
+RFC 7807 problem+json error handlers, CORS, and the `/v1` base-path
+router. No business routes, DB models, or auth live here — see the
+package layout in CLAUDE.md for where those belong (`app/api`,
+`app/models`, `app/schemas`, `app/services`, `app/db`, `app/core`,
+`app/ws`).
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.core.body_limit import MaxBodySizeMiddleware
 from app.core.config import get_settings
 from app.core.correlation import HEADER_NAME
 from app.core.errors import install_error_handlers
@@ -118,6 +120,27 @@ def create_app() -> FastAPI:
         openapi_url="/v1/openapi.json",
         lifespan=_lifespan,
     )
+
+    # T28 security review HIGH-1 / code review Major #1: added *first* --
+    # `app.add_middleware` prepends to Starlette's `user_middleware` list,
+    # so the *last*-added middleware ends up *outermost* (closest to
+    # `ServerErrorMiddleware`, run first/last in the request/response
+    # cycle) and the *first*-added ends up *innermost* (closest to
+    # Starlette's `ExceptionMiddleware`). Adding `MaxBodySizeMiddleware`
+    # here, before CORS/correlation are registered, makes it the innermost
+    # of the three: CORS and correlation-id wrap it, so both its
+    # streamed-overflow path (`BodyTooLargeError`, caught by the exception
+    # handler inside `ExceptionMiddleware`) *and* its immediate
+    # `Content-Length`-precheck `413` (sent directly via `send()`, never
+    # reaching `self._app`/`ExceptionMiddleware`) flow back out through
+    # CORS and correlation-id before reaching the client. Getting this
+    # backwards (adding it last) silently strips
+    # `Access-Control-Allow-Origin` and `X-Correlation-Id` from the
+    # precheck response and breaks the "correlation_id is always present"
+    # contract in `errors.py` -- see `app.core.body_limit`'s module
+    # docstring for why this must still run before the multipart/body
+    # parser buffers anything.
+    app.add_middleware(MaxBodySizeMiddleware)
 
     # Only send credentialed CORS responses to a concrete origin allowlist.
     # A wildcard origin with credentials is a credential-theft vector, so

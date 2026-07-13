@@ -7,8 +7,8 @@ Three consumers of the token-bucket engine:
   keyed per authenticated user, fail-closed on a Redis outage.
 - `enforce_media_upload_rate_limit` — a `Depends()` target for
   `RateLimitScope.MEDIA_UPLOAD`, keyed per authenticated user, fail-open
-  on a Redis outage. **Not wired to any live route** — `POST /v1/media`
-  lands in T28; this exists solely as the hook point T27 scopes.
+  on a Redis outage. Wired to `POST /v1/media` (T28, `app.api.media`) via
+  `Depends(enforce_media_upload_rate_limit)` on that route.
 - `enforce_auth_rate_limit` — a plain async helper (not a bare
   `Depends()`) for `RateLimitScope.AUTH`. Every auth route it applies to
   (`app.api.auth`'s `login`/`register`/`refresh`, `app.api.password`'s
@@ -72,12 +72,10 @@ async def enforce_message_send_rate_limit(current: _CurrentUser) -> None:
 async def enforce_media_upload_rate_limit(current: _CurrentUser) -> None:
     """`Depends()` target: per-user `RateLimitScope.MEDIA_UPLOAD` (20/min).
 
-    Hook point only (T27 scope) — no route depends on this yet; `POST
-    /v1/media` (T28) is expected to add `Depends(enforce_media_upload_rate_limit)`
-    once that endpoint exists. Fail-open: a Redis outage degrades to
-    "allowed" rather than blocking uploads, since this scope is not
-    abuse-sensitive enough to justify a hard fail-closed like auth/
-    message-send.
+    Wired to `POST /v1/media` (T28, `app.api.media`). Fail-open: a Redis
+    outage degrades to "allowed" rather than blocking uploads, since this
+    scope is not abuse-sensitive enough to justify a hard fail-closed like
+    auth/message-send.
     """
 
     decision = await enforce_rate_limit(

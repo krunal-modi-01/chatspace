@@ -52,7 +52,13 @@ async function performRefresh(): Promise<string> {
   return data.access_token;
 }
 
-function refreshAccessToken(): Promise<string> {
+/**
+ * Exported (in addition to the internal 401-retry use above) so other
+ * long-lived clients — namely the WS client's 4402/token-expired close-code
+ * handling — can force a refresh through the same single-flight guard
+ * rather than duplicating the refresh call/rotation logic.
+ */
+export function refreshAccessToken(): Promise<string> {
   if (!refreshInFlight) {
     refreshInFlight = performRefresh().finally(() => {
       refreshInFlight = null;
