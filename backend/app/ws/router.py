@@ -22,13 +22,19 @@ Implements, per the frozen API contract (T23 slice) and F51-F56:
 - **Per-connection subscription bookkeeping** — `connection_manager`
   tracks which topics a connection has joined; no Redis fan-out payload
   is published here (T24).
+- **Presence lifecycle (T25, F49-F50)** — `app.services.presence.handle_connect`
+  ref-counts this connection right after it registers, `handle_heartbeat`
+  renews its TTL on every client `ping` (alongside revalidation), and
+  `handle_disconnect` runs unconditionally in the connection's `finally`
+  block — on a clean client close, a 4402/4403/4404 revalidation drop,
+  and a 4408 heartbeat-timeout reap alike — so every disconnect path
+  decrements the ref-count and, on the last one, durably persists
+  `users.last_seen` and emits the `offline` presence event.
 
-Explicitly out of scope here (T24/T25/T26): publishing/relaying
-`message.created`/`edited`/`deleted` events, `typing` delivery to other
-clients, and `presence` frames. `typing` frames are accepted and
-deliberately no-op'd rather than rejected, so a client that already
-speaks the full contract doesn't get spurious `error` frames for a frame
-type this task doesn't yet act on.
+Explicitly out of scope here (T26): `typing` delivery to other clients.
+`typing` frames are accepted and deliberately no-op'd rather than
+rejected, so a client that already speaks the full contract doesn't get
+spurious `error` frames for a frame type this task doesn't yet act on.
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ from app.core.correlation import generate_correlation_id, set_correlation_id
 from app.core.redis_keys import channel_topic, dm_topic
 from app.db.redis import get_redis_client
 from app.db.session import get_sessionmaker
+from app.services import presence
 from app.ws.auth import (
     WSAuthenticatedConnection,
     WSAuthError,
@@ -198,6 +205,17 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     )
 
     try:
+        # T25: ref-count this connection as soon as it is registered —
+        # inside this same `try` so that even a non-Redis-transport bug in
+        # `handle_connect` still runs `unregister`/`handle_disconnect`
+        # below rather than leaking the connection-manager registration
+        # and skipping the paired decrement (code review finding 4).
+        # Every disconnect path below (clean close, revalidation drop,
+        # heartbeat reap) runs `handle_disconnect` in `finally` regardless
+        # of how the loop exits, so connect/disconnect stay paired.
+        await presence.handle_connect(
+            redis, user_id=auth.user_id, ttl_seconds=settings.presence_ttl_seconds
+        )
         await _connection_loop(
             websocket,
             auth=auth,
@@ -208,6 +226,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         )
     finally:
         connection_manager.unregister(state)
+        async with _db_session() as db:
+            await presence.handle_disconnect(redis, db, user_id=auth.user_id)
 
 
 async def _connection_loop(
@@ -277,6 +297,9 @@ async def _connection_loop(
             # a connection that must be dropped is dropped via its own
             # close code, not via a stale heartbeat timeout race.
             heartbeat_deadline = loop.time() + settings.ws_heartbeat_timeout_seconds
+            await presence.handle_heartbeat(
+                redis, user_id=auth.user_id, ttl_seconds=settings.presence_ttl_seconds
+            )
             close_code = await _revalidate(auth, redis=redis, settings=settings)
             if close_code is not None:
                 logger.info(

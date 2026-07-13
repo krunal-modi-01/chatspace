@@ -16,6 +16,7 @@ Two layers:
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ import pytest
 from starlette.websockets import WebSocketState
 
 from app.core.ids import generate_id
-from app.core.redis_keys import channel_topic, dm_topic
+from app.core.redis_keys import channel_topic, dm_topic, presence_topic
 from app.services.message_events import build_created_event
 from app.ws.connection_manager import ConnectionManager
 from app.ws.fanout import PubSubRelay
@@ -253,6 +254,40 @@ class TestPubSubRelayCrossInstance:
         await relay.stop()
         # Must not raise on a second stop.
         await relay.stop()
+
+    async def test_presence_event_published_reaches_a_subscriber_relay(
+        self, redis_client: Any
+    ) -> None:
+        """Regression for code review finding 1 (T25): `PubSubRelay` must
+        actually subscribe to `presence:*`, not just define the pattern
+        constant — otherwise every presence online/offline event is
+        silently dropped by Redis (no matching subscriber) and never
+        reaches any connected client.
+        """
+
+        manager = ConnectionManager()
+        ws = _FakeWebSocket()
+        state = _register(manager, ws)
+        user_id = uuid4()
+        topic = presence_topic(user_id)
+        manager.subscribe(state, topic)
+
+        relay = PubSubRelay(redis_client, manager=manager)
+        await relay.start()
+        try:
+            event = {
+                "type": "presence",
+                "conversation": None,
+                "data": {"user_id": str(user_id), "state": "online", "last_seen": None},
+            }
+            await redis_client.publish(topic, json.dumps(event))
+
+            await _wait_until(lambda: len(ws.received) == 1)
+            assert ws.received[0]["type"] == "presence"
+            assert ws.received[0]["data"]["user_id"] == str(user_id)
+            assert ws.received[0]["data"]["state"] == "online"
+        finally:
+            await relay.stop()
 
     async def test_non_json_payload_on_topic_is_dropped_not_raised(self, redis_client: Any) -> None:
         """A malformed payload on a subscribed topic must not crash the relay
