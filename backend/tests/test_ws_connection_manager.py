@@ -1,4 +1,4 @@
-"""Integration tests for `WebSocket /v1/ws` (T23, frozen contract).
+"""Integration tests for `WebSocket /v1/ws` (T23/T26, frozen contract).
 
 Exercises the real endpoint end-to-end against Postgres + Redis (skipped
 when unreachable): auth-before-join (missing/invalid/expired token/
@@ -7,8 +7,11 @@ frame is processed), per-frame channel-membership / DM-participant
 re-check on `join` (unauthorized → non-fatal `error` frame, socket stays
 open), ping/pong heartbeat + mid-connection revalidation (4402/4403/
 4404), missed-heartbeat reaping (4408), abusive-frame-rate closing
-(4429), `leave` unsubscription bookkeeping, and the server-drain path
-(1001).
+(4429), `leave` unsubscription bookkeeping, the server-drain path
+(1001), and (`TestTyping`) the `typing` relay: the same per-frame
+authorization re-check `join` runs, and — with a real second connection
+joined to the same topic — actual fan-out to other participants only,
+never back to the typer's own connection (T26).
 """
 
 from __future__ import annotations
@@ -383,9 +386,15 @@ class TestJoinLeave:
             ws.send_json({"type": "ping"})
             assert ws.receive_json() == {"type": "pong"}
 
-    async def test_typing_frame_is_noop(
+    async def test_typing_frame_from_a_channel_member_produces_no_direct_reply(
         self, migrated_db: None, client: TestClient, db_session: AsyncSession
     ) -> None:
+        """An authorized `typing` frame relays to *other* participants only
+        (T26) — with no other connection subscribed to this topic, the
+        typer itself observes no direct reply: the very next frame is
+        still the pong.
+        """
+
         creator, _, token = await _authed_user(db_session)
         channel = await _make_channel(db_session, creator=creator)
         await db_session.commit()
@@ -398,9 +407,155 @@ class TestJoinLeave:
                 }
             )
             ws.send_json({"type": "ping"})
-            # No `error` frame for `typing` (out of scope, deliberately
-            # accepted as a no-op) — the very next frame is the pong.
             assert ws.receive_json() == {"type": "pong"}
+
+
+class TestTyping:
+    """`typing` client frame relay (T26): re-checked authorization + fan-out
+    to other participants only, excluding the typer's own connection.
+    """
+
+    async def test_typing_channel_non_member_is_non_fatal_error(
+        self, migrated_db: None, client: TestClient, db_session: AsyncSession
+    ) -> None:
+        creator, _, _ = await _authed_user(db_session)
+        channel = await _make_channel(db_session, creator=creator)
+        _, _, outsider_token = await _authed_user(db_session)
+        await db_session.commit()
+
+        with client.websocket_connect(_ws_url(outsider_token)) as ws:
+            ws.send_json(
+                {
+                    "type": "typing",
+                    "conversation": {"kind": "channel", "channel_id": str(channel.id)},
+                }
+            )
+            error = ws.receive_json()
+            assert error["type"] == "error"
+            assert error["data"]["code"] == "unauthorized_join"
+
+            # Socket stays open — subsequent ping still works.
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json() == {"type": "pong"}
+
+    async def test_typing_dm_self_is_non_fatal_error(
+        self, migrated_db: None, client: TestClient, db_session: AsyncSession
+    ) -> None:
+        user, _, token = await _authed_user(db_session)
+
+        with client.websocket_connect(_ws_url(token)) as ws:
+            ws.send_json(
+                {"type": "typing", "conversation": {"kind": "dm", "user_id": str(user.id)}}
+            )
+            error = ws.receive_json()
+            assert error["type"] == "error"
+            assert error["data"]["code"] == "invalid_conversation"
+
+    async def test_typing_dm_inactive_peer_is_non_fatal_error(
+        self, migrated_db: None, client: TestClient, db_session: AsyncSession
+    ) -> None:
+        _, _, token = await _authed_user(db_session)
+        inactive_peer = await _make_user(db_session, is_active=False)
+        await db_session.commit()
+
+        with client.websocket_connect(_ws_url(token)) as ws:
+            ws.send_json(
+                {"type": "typing", "conversation": {"kind": "dm", "user_id": str(inactive_peer.id)}}
+            )
+            error = ws.receive_json()
+            assert error["type"] == "error"
+            assert error["data"]["code"] == "unauthorized_join"
+
+    async def test_typing_dm_nonexistent_peer_is_non_fatal_error(
+        self, migrated_db: None, client: TestClient, db_session: AsyncSession
+    ) -> None:
+        _, _, token = await _authed_user(db_session)
+
+        with client.websocket_connect(_ws_url(token)) as ws:
+            ws.send_json(
+                {"type": "typing", "conversation": {"kind": "dm", "user_id": str(uuid.uuid4())}}
+            )
+            error = ws.receive_json()
+            assert error["type"] == "error"
+            assert error["data"]["code"] == "unauthorized_join"
+
+    async def test_typing_relays_to_other_channel_member_but_not_back_to_the_typer(
+        self, migrated_db: None, client: TestClient, db_session: AsyncSession
+    ) -> None:
+        creator, _, creator_token = await _authed_user(db_session)
+        member, _, member_token = await _authed_user(db_session)
+        channel = await _make_channel(db_session, creator=creator, members=[member])
+        await db_session.commit()
+
+        with client.websocket_connect(_ws_url(creator_token)) as typer_ws:
+            typer_ws.send_json(
+                {"type": "join", "conversation": {"kind": "channel", "channel_id": str(channel.id)}}
+            )
+            typer_ws.send_json({"type": "ping"})
+            assert typer_ws.receive_json() == {"type": "pong"}
+
+            with client.websocket_connect(_ws_url(member_token)) as other_ws:
+                other_ws.send_json(
+                    {
+                        "type": "join",
+                        "conversation": {"kind": "channel", "channel_id": str(channel.id)},
+                    }
+                )
+                other_ws.send_json({"type": "ping"})
+                assert other_ws.receive_json() == {"type": "pong"}
+
+                typer_ws.send_json(
+                    {
+                        "type": "typing",
+                        "conversation": {"kind": "channel", "channel_id": str(channel.id)},
+                    }
+                )
+
+                event = other_ws.receive_json()
+                assert event["type"] == "typing"
+                assert event["conversation"] == {
+                    "kind": "channel",
+                    "channel_id": str(channel.id),
+                }
+                assert event["data"]["user_id"] == str(creator.id)
+
+                # The typer's own connection must never see its own typing
+                # event echoed back — the very next frame it observes is
+                # the pong for this ping, not a `typing` frame.
+                typer_ws.send_json({"type": "ping"})
+                assert typer_ws.receive_json() == {"type": "pong"}
+
+    async def test_typing_relays_to_the_dm_peer_but_not_back_to_the_typer(
+        self, migrated_db: None, client: TestClient, db_session: AsyncSession
+    ) -> None:
+        typer, _, typer_token = await _authed_user(db_session)
+        peer, _, peer_token = await _authed_user(db_session)
+        await db_session.commit()
+
+        with client.websocket_connect(_ws_url(typer_token)) as typer_ws:
+            typer_ws.send_json(
+                {"type": "join", "conversation": {"kind": "dm", "user_id": str(peer.id)}}
+            )
+            typer_ws.send_json({"type": "ping"})
+            assert typer_ws.receive_json() == {"type": "pong"}
+
+            with client.websocket_connect(_ws_url(peer_token)) as peer_ws:
+                peer_ws.send_json(
+                    {"type": "join", "conversation": {"kind": "dm", "user_id": str(typer.id)}}
+                )
+                peer_ws.send_json({"type": "ping"})
+                assert peer_ws.receive_json() == {"type": "pong"}
+
+                typer_ws.send_json(
+                    {"type": "typing", "conversation": {"kind": "dm", "user_id": str(peer.id)}}
+                )
+
+                event = peer_ws.receive_json()
+                assert event["type"] == "typing"
+                assert event["data"]["user_id"] == str(typer.id)
+
+                typer_ws.send_json({"type": "ping"})
+                assert typer_ws.receive_json() == {"type": "pong"}
 
 
 class TestRevalidation:

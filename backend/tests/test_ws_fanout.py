@@ -26,7 +26,9 @@ from app.core.ids import generate_id
 from app.core.redis_keys import channel_topic, dm_topic
 from app.services.message_events import build_created_event
 from app.ws.connection_manager import ConnectionManager
-from app.ws.fanout import PubSubRelay
+from app.ws.fanout import PubSubRelay, _typing_typer_id
+from app.ws.frames import ChannelConversation
+from app.ws.typing_events import build_typing_event
 
 pytestmark = pytest.mark.usefixtures("configured_env")
 
@@ -53,6 +55,10 @@ class _FakeWebSocket:
 
 def _register(manager: ConnectionManager, websocket: _FakeWebSocket) -> Any:
     return manager.register(websocket, user_id=uuid4(), session_id=uuid4())  # type: ignore[arg-type]
+
+
+def _register_as(manager: ConnectionManager, websocket: _FakeWebSocket, *, user_id: Any) -> Any:
+    return manager.register(websocket, user_id=user_id, session_id=uuid4())  # type: ignore[arg-type]
 
 
 class TestBroadcastToTopic:
@@ -111,6 +117,48 @@ class TestBroadcastToTopic:
         manager = ConnectionManager()
 
         await manager.broadcast_to_topic("chan:nobody-here", {"type": "message.created"})
+
+    async def test_exclude_user_id_skips_every_connection_of_that_user(self) -> None:
+        """`exclude_user_id` (T26) must skip *all* of the excluded user's
+        connections (every tab/instance), not just one — a `typing`
+        event must never bounce back to any of the typer's own tabs.
+        """
+
+        manager = ConnectionManager()
+        typer_user_id = uuid4()
+        ws_typer_tab_1 = _FakeWebSocket()
+        ws_typer_tab_2 = _FakeWebSocket()
+        ws_other_user = _FakeWebSocket()
+        for state in (
+            _register_as(manager, ws_typer_tab_1, user_id=typer_user_id),
+            _register_as(manager, ws_typer_tab_2, user_id=typer_user_id),
+            _register(manager, ws_other_user),
+        ):
+            manager.subscribe(state, "chan:abc")
+
+        await manager.broadcast_to_topic(
+            "chan:abc", {"type": "typing"}, exclude_user_id=typer_user_id
+        )
+
+        assert ws_typer_tab_1.received == []
+        assert ws_typer_tab_2.received == []
+        assert ws_other_user.received == [{"type": "typing"}]
+
+    async def test_no_exclude_user_id_delivers_to_the_sender_too(self) -> None:
+        """No regression for `message.*`: omitting `exclude_user_id`
+        delivers to every subscribed connection, including one belonging
+        to whichever user "sent" the event.
+        """
+
+        manager = ConnectionManager()
+        sender_user_id = uuid4()
+        ws_sender = _FakeWebSocket()
+        state = _register_as(manager, ws_sender, user_id=sender_user_id)
+        manager.subscribe(state, "chan:abc")
+
+        await manager.broadcast_to_topic("chan:abc", {"type": "message.created"})
+
+        assert ws_sender.received == [{"type": "message.created"}]
 
 
 @pytest.fixture
@@ -276,6 +324,91 @@ class TestPubSubRelayCrossInstance:
             assert ws.received[0]["data"]["id"] == "ok"
         finally:
             await relay.stop()
+
+    async def test_typing_event_is_not_relayed_back_to_the_typers_own_connection(
+        self, redis_client: Any
+    ) -> None:
+        """T26: a `typing` event fans out to *other* participants only —
+        the relay must exclude the typer's own connection even though it
+        is subscribed to the same topic (contract: "fans out ... to
+        other participants of the same channel/DM only").
+        """
+
+        manager = ConnectionManager()
+        typer_user_id = uuid4()
+        other_user_id = uuid4()
+        ws_typer = _FakeWebSocket()
+        ws_other = _FakeWebSocket()
+        topic = channel_topic(uuid4())
+        manager.subscribe(_register_as(manager, ws_typer, user_id=typer_user_id), topic)
+        manager.subscribe(_register_as(manager, ws_other, user_id=other_user_id), topic)
+
+        event = build_typing_event(
+            user_id=typer_user_id,
+            conversation=ChannelConversation(kind="channel", channel_id=uuid4()),
+        )
+
+        relay = PubSubRelay(redis_client, manager=manager)
+        await relay.start()
+        try:
+            import json
+
+            await redis_client.publish(topic, json.dumps(event))
+
+            await _wait_until(lambda: len(ws_other.received) == 1)
+            assert ws_other.received[0] == event
+            assert ws_typer.received == []
+        finally:
+            await relay.stop()
+
+    async def test_message_created_still_relays_to_the_senders_own_connection(
+        self, redis_client: Any
+    ) -> None:
+        """No regression: only `typing` self-excludes — `message.*` events
+        must still reach every subscribed connection, including one
+        belonging to the sender.
+        """
+
+        manager = ConnectionManager()
+        sender_user_id = uuid4()
+        ws_sender = _FakeWebSocket()
+        topic = channel_topic(uuid4())
+        manager.subscribe(_register_as(manager, ws_sender, user_id=sender_user_id), topic)
+
+        relay = PubSubRelay(redis_client, manager=manager)
+        await relay.start()
+        try:
+            await redis_client.publish(
+                topic, '{"type": "message.created", "data": {"sender_id": "irrelevant-here"}}'
+            )
+
+            await _wait_until(lambda: len(ws_sender.received) == 1)
+        finally:
+            await relay.stop()
+
+
+class TestTypingTyperId:
+    """Unit tests for `app.ws.fanout._typing_typer_id`."""
+
+    def test_extracts_user_id_from_a_typing_event(self) -> None:
+        typer_id = uuid4()
+        payload = {"type": "typing", "data": {"user_id": str(typer_id)}}
+
+        assert _typing_typer_id(payload) == typer_id
+
+    def test_returns_none_for_non_typing_event_types(self) -> None:
+        payload = {"type": "message.created", "data": {"user_id": str(uuid4())}}
+
+        assert _typing_typer_id(payload) is None
+
+    def test_returns_none_when_data_is_missing_or_not_an_object(self) -> None:
+        assert _typing_typer_id({"type": "typing"}) is None
+        assert _typing_typer_id({"type": "typing", "data": "not-an-object"}) is None
+
+    def test_returns_none_when_user_id_is_missing_or_malformed(self) -> None:
+        assert _typing_typer_id({"type": "typing", "data": {}}) is None
+        assert _typing_typer_id({"type": "typing", "data": {"user_id": 123}}) is None
+        assert _typing_typer_id({"type": "typing", "data": {"user_id": "not-a-uuid"}}) is None
 
 
 class _FlakyPubSub:
