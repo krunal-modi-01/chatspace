@@ -16,11 +16,13 @@ them.
 
 from __future__ import annotations
 
+import io
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.ids import generate_id
@@ -42,6 +44,24 @@ _TEST_CREDENTIAL = "correct-horse-1"
 _MESSAGE_SEND_CAPACITY = 20
 # AUTH capacity — must match `RateLimitScope.AUTH`'s policy.
 _AUTH_CAPACITY = 5
+# MEDIA_UPLOAD capacity (burst) — must match `RateLimitScope.MEDIA_UPLOAD`'s
+# policy (T28's `Depends(enforce_media_upload_rate_limit)` wiring on
+# `POST /v1/media`).
+_MEDIA_UPLOAD_CAPACITY = 20
+
+
+def _minimal_png_bytes() -> bytes:
+    """A real, tiny, valid PNG — must survive `strip_exif`'s decode/re-encode.
+
+    Unlike a bare magic-byte signature, `POST /v1/media` (`kind=image`)
+    also runs the upload through Pillow's mandatory EXIF-strip (F61), so
+    this needs to be an actual decodable image, not just bytes that sniff
+    as one.
+    """
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2), color=(1, 2, 3)).save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def _settings() -> object:
@@ -331,3 +351,76 @@ class TestPasswordResetRequestRateLimit:
         # here, never a different status/shape hinting the email exists.
         assert over_limit.status_code == 429
         assert int(over_limit.headers["retry-after"]) >= 1
+
+
+def _fake_put_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Monkeypatch `app.services.media.put_object` so uploads succeed without a real S3.
+
+    Mirrors `test_media_api.py`'s identical helper -- this suite only
+    cares that `Depends(enforce_media_upload_rate_limit)` is actually
+    wired onto the route, not the upload's own behavior.
+    """
+
+    async def _fake(
+        client: object, *, bucket: str, key: str, body: bytes, content_type: str
+    ) -> None:
+        return None
+
+    monkeypatch.setattr("app.services.media.put_object", _fake)
+
+
+class TestMediaUploadRateLimit:
+    """Regression test for T28 code review Minor #4.
+
+    `POST /v1/media` wires `Depends(enforce_media_upload_rate_limit)`
+    (`RateLimitScope.MEDIA_UPLOAD`, 20/min per user) same as every other
+    rate-limited route in this suite -- without a test asserting the `429`
+    end-to-end, a future refactor could silently drop the `Depends()` from
+    the route signature and nothing would catch it.
+    """
+
+    async def test_burst_capacity_then_429_with_retry_after(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        redis_available: bool,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        if not redis_available:
+            pytest.skip("local Redis not reachable on localhost:6379")
+
+        _, token = await _authed_user(db_session)
+        _fake_put_object(monkeypatch)
+        png_bytes = _minimal_png_bytes()
+
+        for _ in range(_MEDIA_UPLOAD_CAPACITY):
+            response = client.post(
+                "/v1/media",
+                headers=_auth_header(token),
+                data={
+                    "declared_content_type": "image/png",
+                    "kind": "image",
+                    "filename": "screenshot.png",
+                },
+                files={"file": ("screenshot.png", png_bytes, "image/png")},
+            )
+            assert response.status_code == 201
+
+        over_limit = client.post(
+            "/v1/media",
+            headers=_auth_header(token),
+            data={
+                "declared_content_type": "image/png",
+                "kind": "image",
+                "filename": "one-too-many.png",
+            },
+            files={"file": ("one-too-many.png", png_bytes, "image/png")},
+        )
+
+        assert over_limit.status_code == 429
+        assert over_limit.headers["content-type"] == "application/problem+json"
+        assert int(over_limit.headers["retry-after"]) >= 1
+        body = over_limit.json()
+        assert body["status"] == 429
+        assert "correlation_id" in body
