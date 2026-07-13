@@ -5,11 +5,16 @@ import type { ProblemDetails } from './types';
  * so callers never accidentally log tokens/headers. */
 export class ApiError extends Error {
   readonly problem: ProblemDetails;
+  /** Seconds from the `Retry-After` response header, when the server sent
+   * one (e.g. `429` on message send, 10/10s burst 20 per the frozen
+   * contract). `undefined` when absent/not applicable. */
+  readonly retryAfterSeconds?: number;
 
-  constructor(problem: ProblemDetails) {
+  constructor(problem: ProblemDetails, retryAfterSeconds?: number) {
     super(problem.detail || problem.title);
     this.name = 'ApiError';
     this.problem = problem;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 
   get status(): number {

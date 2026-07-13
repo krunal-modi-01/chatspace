@@ -7,6 +7,8 @@ import { PublicOnlyRoute } from './components/PublicOnlyRoute';
 import { useSessionBootstrap } from './hooks/useSessionBootstrap';
 import { InvitesPage } from './pages/admin/InvitesPage';
 import { UsersPage } from './pages/admin/UsersPage';
+import { ChannelPage } from './pages/channels/ChannelPage';
+import { ChannelsPage } from './pages/channels/ChannelsPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -33,6 +35,8 @@ export function App(): JSX.Element {
       <Route element={<ProtectedRoute />}>
         <Route element={<AppShell />}>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/channels" element={<ChannelsPage />} />
+          <Route path="/channels/:channelId" element={<ChannelPage />} />
           <Route path="/settings/password" element={<PasswordChangePage />} />
           <Route path="/settings/sessions" element={<SessionsPage />} />
 

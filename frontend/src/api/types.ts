@@ -171,6 +171,119 @@ export interface ListMessagesParams {
 }
 
 // ---------------------------------------------------------------------------
+// Channels & membership (T31) — create/browse/join/leave + admin membership
+// management. Messages are out of scope here (T32).
+// ---------------------------------------------------------------------------
+
+/** Per-channel role — open enum server-side (cross-cutting contract
+ * convention: clients must tolerate unknown `role` values). */
+export type ChannelRole = 'member' | 'admin' | (string & {});
+
+export interface CreateChannelRequest {
+  name: string;
+  is_private: boolean;
+}
+
+/** `201` body of `POST /v1/channels` — no `my_role` (only `GET /{id}` adds it). */
+export interface CreateChannelResponse {
+  id: string;
+  name: string;
+  is_private: boolean;
+  created_by: string;
+  created_at: string;
+  member_count: number;
+}
+
+/** One entry of `GET /v1/channels/public`'s `items` — public channels the
+ * caller is not yet a member of. */
+export interface PublicChannelSummary {
+  id: string;
+  name: string;
+  is_private: false;
+  member_count: number;
+}
+
+export interface ListPublicChannelsParams {
+  limit?: number;
+  offset?: number;
+}
+
+/** `200` body of `GET /v1/channels/{channel_id}`. `my_role` is `null` for a
+ * non-member viewing a public channel (a private channel a non-member
+ * cannot see 404s uniformly instead) and drives the admin-affordance UI. */
+export interface ChannelDetail {
+  id: string;
+  name: string;
+  is_private: boolean;
+  created_by: string;
+  created_at: string;
+  member_count: number;
+  my_role: ChannelRole | null;
+}
+
+/** `200` body shared by join / admin-add-member / role-change. */
+export interface ChannelMembership {
+  channel_id: string;
+  user_id: string;
+  role: ChannelRole;
+  joined_at: string;
+}
+
+/** One entry of `GET /v1/channels/{channel_id}/members`'s `items`. */
+export interface ChannelMember {
+  user_id: string;
+  username: string;
+  first_name: string;
+  last_name: string;
+  avatar_url: string | null;
+  role: ChannelRole;
+  joined_at: string;
+}
+
+export interface ListChannelMembersParams {
+  limit?: number;
+  offset?: number;
+}
+
+/** `200` envelope of the member list — `total` only, no echoed
+ * `limit`/`offset` (unlike `GET /channels/public`'s envelope). */
+export interface ChannelMemberListResponse {
+  items: ChannelMember[];
+  total: number;
+}
+
+export interface AddChannelMemberRequest {
+  user_id: string;
+  role: ChannelRole;
+}
+
+export interface UpdateChannelMemberRoleRequest {
+  role: ChannelRole;
+}
+
+// ---------------------------------------------------------------------------
+// Messaging UI (T32) — send/edit/delete + channel-member identity lookup.
+// ---------------------------------------------------------------------------
+
+/** Body of `POST /v1/channels/{channel_id}/messages`. `Idempotency-Key` is a
+ * required header (client-generated UUID), not a body field — see
+ * `sendChannelMessage` in `messagesApi.ts`. */
+export interface SendMessageRequest {
+  content: string;
+  media_ids?: string[];
+}
+
+/** Body of `PATCH /v1/messages/{message_id}` (author-only edit). */
+export interface EditMessageRequest {
+  content: string;
+}
+
+/** Alias of `ChannelMember` for T32 (messaging UI) call sites — the only
+ * identity source for a message's `sender_id` (no dedicated user-lookup
+ * endpoint). `role` is an open set — tolerate unknown values. */
+export type ChannelMemberSummary = ChannelMember;
+
+// ---------------------------------------------------------------------------
 // Admin surfaces (T45/T46) — invite management + user management.
 // ---------------------------------------------------------------------------
 
