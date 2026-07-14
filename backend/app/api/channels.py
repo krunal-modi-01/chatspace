@@ -1,4 +1,4 @@
-"""`/v1/channels*` — channel create/get/public browse/membership (T18/T19, frozen contract).
+"""`/v1/channels*` — channel create/get/browse/membership (T18/T19/T48, frozen contract).
 
 T18 (create/get/public browse):
 
@@ -13,6 +13,14 @@ T18 (create/get/public browse):
   browse of public channels the caller does not already belong to (F30).
   Page size default and maximum are 50; an invalid `limit`/`offset` is
   `400`.
+- `GET /v1/channels` (Bearer, any active user, T48): cursor-paginated
+  "My channels" list — every channel, public **and** private, the caller
+  is a member of (F73), each with the caller's own `my_role`. Complements
+  `GET /v1/channels/public` (which excludes own memberships). Reuses the
+  T07 keyset pagination utility over `(created_at, id)` for consistency
+  with ADR-0003 (default limit 50, clamp 100); an empty membership set is
+  `{ items: [], next_cursor: null }`, not an error; a malformed
+  `limit`/`cursor` is `400`.
 
 T19 (membership mutation, F31-F37):
 
@@ -61,6 +69,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import AuthenticatedUser, require_auth
+from app.core.pagination import PaginationError, decode_cursor, resolve_limit
 from app.core.request_body import openapi_request_body, parse_body
 from app.db.session import get_db_session
 from app.models.channel import Channel
@@ -74,6 +83,8 @@ from app.schemas.channels import (
     MemberListResponse,
     MemberRoleUpdateRequest,
     MembershipResponse,
+    MyChannelListItem,
+    MyChannelListResponse,
     PublicChannelItem,
     PublicChannelListResponse,
 )
@@ -96,6 +107,7 @@ from app.services.channels import (
     join_public_channel,
     leave_channel,
     list_channel_members,
+    list_my_channels,
     list_public_channels,
     remove_channel_member,
 )
@@ -174,6 +186,44 @@ def _parse_pagination(
     return limit, offset
 
 
+def _parse_my_channels_limit(raw: str | None) -> int:
+    """Parse `limit` for `GET /v1/channels`, raising `PaginationError` (-> frozen `400`) on failure.
+
+    Mirrors `app.api.invites._parse_list_limit`: accepted as a raw string
+    (not a typed FastAPI `int` query parameter) so a non-numeric value maps
+    to the contract's `400` rather than FastAPI's own `422`.
+    `resolve_limit` supplies the ADR-0003 default (50) and clamp (100).
+    """
+
+    if raw is None:
+        return resolve_limit(None)
+    try:
+        value = int(raw)
+    except ValueError:
+        raise PaginationError(field="limit", detail="limit must be a positive integer") from None
+    return resolve_limit(value)
+
+
+def _require_my_role(my_role: ChannelMemberRole | None) -> ChannelMemberRole:
+    """Narrow `ChannelView.my_role` to non-`None` for `GET /v1/channels`.
+
+    Every row `list_my_channels` returns comes from an inner join on the
+    caller's own membership, so `my_role` is always populated here.
+    Deliberately an explicit runtime check (not a bare `assert`, which
+    `python -O` strips): if a future refactor ever weakens that inner join
+    to a `LEFT JOIN`, this must fail loudly and clearly at the invariant
+    site rather than surface as a `None.value` `AttributeError` deep
+    inside `MyChannelListItem.from_channel`.
+    """
+
+    if my_role is None:
+        raise RuntimeError(
+            "list_my_channels returned a row with no membership role; "
+            "expected every row to come from an inner join on the caller's own membership"
+        )
+    return my_role
+
+
 def _parse_role(raw_role: str) -> ChannelMemberRole:
     """Validate `raw_role` against the two known wire values, or raise the frozen `422`.
 
@@ -230,6 +280,44 @@ async def create_channel_route(
     )
 
     return ChannelCreateResponse.from_channel(channel, member_count=1)
+
+
+@router.get(
+    "",
+    response_model=MyChannelListResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def list_my_channels_route(
+    current: _CurrentUser,
+    db: _DbSession,
+    limit: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query()] = None,
+) -> MyChannelListResponse:
+    """`GET /v1/channels` (T48, F73): "My channels" — cursor-paginated, scoped to the caller.
+
+    An empty membership set is a clean `{ items: [], next_cursor: null }`,
+    not an error. A malformed `limit`/`cursor` raises `PaginationError`,
+    which the app-wide handler (`app.core.errors`) maps to the frozen
+    `400` problem+json — this route does not itself log anything (a read
+    has nothing to audit, mirroring `app.api.invites.list_invites_route`).
+    """
+
+    resolved_limit = _parse_my_channels_limit(limit)
+    cursor_key = decode_cursor(cursor) if cursor else None
+
+    page = await list_my_channels(
+        db, caller_id=current.user_id, limit=resolved_limit, cursor=cursor_key
+    )
+
+    items = [
+        MyChannelListItem.from_channel(
+            view.channel,
+            member_count=view.member_count,
+            my_role=_require_my_role(view.my_role),
+        )
+        for view in page.items
+    ]
+    return MyChannelListResponse(items=items, next_cursor=page.next_cursor)
 
 
 @router.get(

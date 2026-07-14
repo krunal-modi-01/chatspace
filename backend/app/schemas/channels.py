@@ -16,6 +16,10 @@ Three distinct response shapes, matched exactly to the frozen contract:
   channel).
 - `PublicChannelItem` (an entry in `GET /v1/channels/public`'s `items`):
   the trimmed `{ id, name, is_private, member_count }` shape only.
+- `MyChannelListItem` (an entry in `GET /v1/channels`'s `items`, T48/F73):
+  the same fields as `ChannelDetailResponse` but with `my_role` required
+  (never `null`) — every row is, by construction, a channel the caller
+  belongs to.
 
 T19 (membership mutation) adds:
 
@@ -125,6 +129,44 @@ class PublicChannelListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class MyChannelListItem(BaseModel):
+    """One entry of `GET /v1/channels`'s `items` array (T48/F73).
+
+    Same shape as `ChannelDetailResponse` except `my_role` is required
+    (not nullable) — this endpoint only ever lists channels the caller is
+    a member of, so `my_role` is always one of the two known roles.
+    """
+
+    id: UUID
+    name: str
+    is_private: bool
+    created_by: UUID
+    created_at: datetime
+    member_count: int
+    my_role: ChannelRoleWire
+
+    @classmethod
+    def from_channel(
+        cls, channel: Channel, *, member_count: int, my_role: ChannelMemberRole
+    ) -> MyChannelListItem:
+        return cls(
+            id=channel.id,
+            name=channel.name,
+            is_private=channel.is_private,
+            created_by=channel.created_by,
+            created_at=channel.created_at,
+            member_count=member_count,
+            my_role=my_role.value,
+        )
+
+
+class MyChannelListResponse(BaseModel):
+    """`200` envelope of `GET /v1/channels` (T48/F73) — cursor-pagination shape (ADR-0003)."""
+
+    items: list[MyChannelListItem]
+    next_cursor: str | None
 
 
 class MembershipResponse(BaseModel):
