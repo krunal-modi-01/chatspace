@@ -6,8 +6,11 @@ import type {
   ChannelMembership,
   CreateChannelRequest,
   CreateChannelResponse,
+  CursorPage,
   ListChannelMembersParams,
+  ListMyChannelsParams,
   ListPublicChannelsParams,
+  MyChannelSummary,
   OffsetPage,
   PublicChannelSummary,
   UpdateChannelMemberRoleRequest,
@@ -31,6 +34,15 @@ function toQueryString(params: object): string {
  * invalid name (length/charset). */
 export function createChannel(payload: CreateChannelRequest): Promise<CreateChannelResponse> {
   return apiRequest<CreateChannelResponse>('/channels', { method: 'POST', body: payload });
+}
+
+/** Protected — cursor-paginated list of every channel (public and private)
+ * the caller is a member of; backs the "My Channels" navigation surface
+ * (F73, T50). Mirrors `adminApi.listInvites`'s cursor-page shape. Default
+ * limit 50, server max 100 (clamped); an empty membership set is a
+ * non-error `{ items: [], next_cursor: null }` page. */
+export function listMyChannels(params: ListMyChannelsParams = {}): Promise<CursorPage<MyChannelSummary>> {
+  return apiRequest<CursorPage<MyChannelSummary>>(`/channels${toQueryString(params)}`, { method: 'GET' });
 }
 
 /** Protected — offset-paginated browse of public channels the caller is not

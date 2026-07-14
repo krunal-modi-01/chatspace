@@ -252,6 +252,26 @@ export interface ChannelMemberListResponse {
   total: number;
 }
 
+/** One entry of `GET /v1/channels`'s `items` — every channel (public and
+ * private) the caller is a member of; backs the "My Channels" navigation
+ * list (T50, F73). Unlike `PublicChannelSummary`, `is_private` may be
+ * `true` here, and `my_role` is always present (never `null` — every row is
+ * necessarily a membership). */
+export interface MyChannelSummary {
+  id: string;
+  name: string;
+  is_private: boolean;
+  created_by: string;
+  created_at: string;
+  member_count: number;
+  my_role: ChannelRole;
+}
+
+export interface ListMyChannelsParams {
+  limit?: number;
+  cursor?: string;
+}
+
 export interface AddChannelMemberRequest {
   user_id: string;
   role: ChannelRole;
