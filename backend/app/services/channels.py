@@ -13,6 +13,13 @@ Owns the transactional and query logic behind `/v1/channels*`:
 - `list_public_channels`: the offset-paginated, membership-excluding query
   behind `GET /v1/channels/public`, plus the matching `COUNT(*)` for the
   envelope's `total`.
+- `list_my_channels` (T48, F73): the cursor-paginated, membership-*including*
+  counterpart — every channel (public and private) the caller belongs to,
+  reusing the T07 keyset pagination utility (`app.core.pagination`) over
+  `(created_at, id)` for consistency with ADR-0003, and the same
+  `ChannelView` projection `get_channel_view` returns (`member_count` +
+  the caller's own `my_role`, here always populated since every row comes
+  from an inner join on the caller's own membership).
 - `get_membership`: the **single reusable server-side membership-check
   primitive** (F34) — a plain point lookup on the `channel_members`
   composite PK. Every T19 membership endpoint below calls this rather
@@ -51,17 +58,23 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum, auto
+from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import Subquery, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.ids import generate_id
+from app.core.pagination import CursorKey, Page, apply_keyset, paginate_rows
 from app.models.channel import Channel
 from app.models.channel_member import ChannelMember, ChannelMemberRole
 from app.models.user import User
+
+if TYPE_CHECKING:
+    from sqlalchemy import ColumnElement
 
 # Mirrors the shipped `CHECK (name ~ '^[A-Za-z0-9 _-]{1,80}$')` constraint
 # (R36) exactly — pre-validated here so a charset/length violation maps to
@@ -92,6 +105,29 @@ async def _count_members(db: AsyncSession, channel_id: UUID) -> int:
         .where(ChannelMember.channel_id == channel_id)
     )
     return int(result.scalar_one())
+
+
+def _member_count_subquery() -> Subquery:
+    """Build the `channel_id -> member_count` derived table shared by every
+    channel-list query that needs a per-row member count alongside a page
+    of `channels` rows (`list_public_channels`, `list_my_channels`).
+
+    A plain `GROUP BY channel_id` count over the whole `channel_members`
+    table; callers `outerjoin` this against `Channel` and
+    `func.coalesce(...member_count, 0)` the result, so a channel with zero
+    members (not otherwise reachable in practice, since every channel
+    always has at least its creator, but defensive regardless) still
+    counts as `0` rather than being dropped by an inner join.
+    """
+
+    return (
+        select(
+            ChannelMember.channel_id.label("channel_id"),
+            func.count().label("member_count"),
+        )
+        .group_by(ChannelMember.channel_id)
+        .subquery()
+    )
 
 
 async def create_channel(
@@ -186,14 +222,7 @@ async def list_public_channels(
     total_result = await db.execute(select(func.count()).select_from(Channel).where(base_filter))
     total = int(total_result.scalar_one())
 
-    member_count_subquery = (
-        select(
-            ChannelMember.channel_id.label("channel_id"),
-            func.count().label("member_count"),
-        )
-        .group_by(ChannelMember.channel_id)
-        .subquery()
-    )
+    member_count_subquery = _member_count_subquery()
     rows_result = await db.execute(
         select(Channel, func.coalesce(member_count_subquery.c.member_count, 0))
         .outerjoin(member_count_subquery, member_count_subquery.c.channel_id == Channel.id)
@@ -208,6 +237,61 @@ async def list_public_channels(
     ]
 
     return PublicChannelPage(rows=rows, total=total)
+
+
+async def list_my_channels(
+    db: AsyncSession, *, caller_id: UUID, limit: int, cursor: CursorKey | None = None
+) -> Page[ChannelView]:
+    """Cursor-paginated list of every channel `caller_id` belongs to (F73, T48).
+
+    Unlike `list_public_channels` (which *excludes* the caller's own
+    memberships for direct-join browsing), this is the "My channels"
+    navigation read: public **and** private channels the caller is
+    currently a member of, each paired with the caller's own `my_role` —
+    reusing `ChannelView` (the same projection `get_channel_view` returns)
+    rather than introducing a parallel shape. Scoped strictly to
+    `caller_id`: the inner join on `channel_members` is keyed on
+    `caller_id`, served by `ix_channel_members_user`, so no other user's
+    memberships are ever reachable through this query.
+
+    Ordered `(created_at, id)` DESC via the T07 keyset utility
+    (`app.core.pagination`), matching ADR-0003 and the frozen contract;
+    `limit` must already be resolved/clamped by the caller
+    (`app.core.pagination.resolve_limit`, default 50 / clamp 100). Every
+    returned `ChannelView.my_role` is guaranteed non-`None` — unlike
+    `get_channel_view`'s viewer-may-be-a-non-member case — since a row
+    only appears here at all because the inner join found the caller's own
+    membership.
+    """
+
+    member_count_subquery = _member_count_subquery()
+
+    stmt = (
+        select(Channel, ChannelMember.role, func.coalesce(member_count_subquery.c.member_count, 0))
+        .join(
+            ChannelMember,
+            (ChannelMember.channel_id == Channel.id) & (ChannelMember.user_id == caller_id),
+        )
+        .outerjoin(member_count_subquery, member_count_subquery.c.channel_id == Channel.id)
+    )
+    stmt = apply_keyset(
+        stmt,
+        created_at_col=cast("ColumnElement[datetime]", Channel.created_at),
+        id_col=cast("ColumnElement[UUID]", Channel.id),
+        cursor=cursor,
+    ).limit(limit + 1)
+
+    result = await db.execute(stmt)
+    rows = [
+        ChannelView(channel=channel, member_count=int(member_count), my_role=role)
+        for channel, role, member_count in result.all()
+    ]
+
+    return paginate_rows(
+        rows,
+        limit=limit,
+        cursor_key=lambda view: CursorKey(created_at=view.channel.created_at, id=view.channel.id),
+    )
 
 
 async def get_membership(
