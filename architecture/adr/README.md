@@ -19,3 +19,4 @@ The Technical Specification that these ADRs support: [`docs/spec/chatspace-v1-te
 | [ADR-0009](0009-system-admin-bootstrap.md) | System Admin bootstrap — env-seeded at startup | Proposed | 2026-07-02 |
 | [ADR-0010](0010-transactional-email.md) | Transactional email — provider-agnostic SMTP abstraction, fail-loud, no queue | Proposed | 2026-07-02 |
 | [ADR-0011](0011-forced-password-change-unblock.md) | Forced password-change unblock — reuse self-service reset (amends ADR-0009) | Proposed | 2026-07-08 |
+| [ADR-0012](0012-per-user-websocket-topic.md) | Per-user WebSocket topic for membership lifecycle events (extends ADR-0004) | Proposed | 2026-07-13 |

@@ -1,10 +1,10 @@
 # chatspace v1 — Task Breakdown
 
-> Ordered, dependency-aware decomposition of the [v1 technical spec](./chatspace-v1-technical-spec.md) into independently-buildable, PR-sized tasks. Honors the binding ADRs (`architecture/adr/0001`–`0011`) and the 1,000-user single-Postgres/single-Redis constraint from `CLAUDE.md`. No ADR is re-decided here.
+> Ordered, dependency-aware decomposition of the [v1 technical spec](./chatspace-v1-technical-spec.md) into independently-buildable, PR-sized tasks. Honors the binding ADRs (`architecture/adr/0001`–`0012`) and the 1,000-user single-Postgres/single-Redis constraint from `CLAUDE.md`. No ADR is re-decided here.
 
 ## Summary
 
-This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks across six milestones, plus a small M7 addenda milestone for gaps found post-implementation: **M0 Foundation** (skeleton, config, DB/Redis wiring, the initial schema migration, shared id/pagination utilities), **M1 Auth & Onboarding** (security primitives, revocable sessions, email, non-skippable admin bootstrap, invites, registration, login/reset), **M2 Core Domain** (profile, channels, membership + succession, admin deactivate, messages, DMs), **M3 Realtime** (WS connection manager, Redis persist-then-publish fan-out, presence, typing), **M4 Cross-cutting** (rate limiting, media pipeline + association), **M5 Frontend** (auth/channel/messaging/WS/presence/media UI + WCAG AA), **M6 Ship** (docker-compose, CI, observability, Render deploy, load test + restore drill GA gate), **M7 Addenda** (T42: closes the `must_change_password` lockout discovered while exercising T30, per ADR-0011), and **M8 Admin surfaces** (T43–T47: the System Admin invite/user-management screens and their backing list endpoints, closing a frontend traceability gap where admin capabilities were specified only as backend behavior — PRD v2 §11, R54/R55, F71/F72; T44 also lands the T20 deactivate/reactivate endpoints). The ordering honors persist-then-publish (T24 after message persistence), auth-before-join WS semantics, and the 1,000-user single-Postgres/single-Redis constraint. Backend and frontend tracks run largely in parallel against the frozen API contract.
+This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks across six milestones, plus a small M7 addenda milestone for gaps found post-implementation: **M0 Foundation** (skeleton, config, DB/Redis wiring, the initial schema migration, shared id/pagination utilities), **M1 Auth & Onboarding** (security primitives, revocable sessions, email, non-skippable admin bootstrap, invites, registration, login/reset), **M2 Core Domain** (profile, channels, membership + succession, admin deactivate, messages, DMs), **M3 Realtime** (WS connection manager, Redis persist-then-publish fan-out, presence, typing), **M4 Cross-cutting** (rate limiting, media pipeline + association), **M5 Frontend** (auth/channel/messaging/WS/presence/media UI + WCAG AA), **M6 Ship** (docker-compose, CI, observability, Render deploy, load test + restore drill GA gate), **M7 Addenda** (T42: closes the `must_change_password` lockout discovered while exercising T30, per ADR-0011), and **M8 Admin surfaces** (T43–T47: the System Admin invite/user-management screens and their backing list endpoints, closing a frontend traceability gap where admin capabilities were specified only as backend behavior — PRD v2 §11, R54/R55, F71/F72; T44 also lands the T20 deactivate/reactivate endpoints), and **M9 My channels & live membership** (T48–T52: the caller-scoped `GET /v1/channels` list, the per-user WS topic with `channel.member_added`/`channel.member_removed` events per ADR-0012, the live-updating My Channels navigation UI, and an a11y pass — closing a traceability gap where a user added to a private channel could not see it anywhere; the public browse F30 excludes own memberships and no "list my channels" read was ever specified — PRD v3 R56/R57, F73–F75). The ordering honors persist-then-publish (T24 after message persistence), auth-before-join WS semantics, and the 1,000-user single-Postgres/single-Redis constraint. Backend and frontend tracks run largely in parallel against the frozen API contract.
 
 ## Milestone overview
 
@@ -19,6 +19,7 @@ This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks 
 | **M6 — Ship** | T37–T41 | infrastructure, devops, performance | Docker, CI, observability, deploy, GA validation |
 | **M7 — Addenda** | T42 | backend, frontend | Closes the `must_change_password` login lockout (ADR-0011) |
 | **M8 — Admin surfaces** | T43–T47 | backend, frontend, accessibility | System Admin screens (invite + user management) + their backing list endpoints; closes the frontend traceability gap (PRD v2 §11, R54/R55, F71/F72) |
+| **M9 — My channels & live membership** | T48–T52 | backend, frontend, accessibility | Caller-scoped channel list + per-user WS membership events + live-updating nav UI; closes the added-to-private-channel visibility gap (PRD v3 R56/R57, F73–F75, ADR-0012) |
 
 Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff check` / `npm run lint`; **TYPE** = `mypy app` / `npm run typecheck`; **TEST** = `pytest` / `npm run test`; **SEC** = secret-scan hook passes + security-reviewer sign-off (invoked wherever auth/PII/secrets/tokens are touched).
 
@@ -532,6 +533,56 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 
 ---
 
+## M9 — My channels & live membership (gap found post-implementation)
+
+> **Context.** A user *added* to a private channel had no way to *see* it: the only channel list ever specified is the public browse (F30/R49), which **excludes** channels the caller already belongs to, and no "list my channels" read was ever scoped — the same traceability-gap class M8 closed for the admin surfaces. The write side (T19 membership endpoints, T31 admin member-management UI) shipped correctly; the read surface and its live propagation were never specified anywhere (the PRD §11 "no channels joined" empty state and the DB design's `ix_channel_members_user` "My channels" index both assumed it). This milestone closes both, per **PRD v3 §11 / R56 / R57, FS F73–F75**. **No DB schema change** — `ix_channel_members_user` was designed for exactly this read. The new per-user WS topic and membership events are governed by **[ADR-0012](../../architecture/adr/0012-per-user-websocket-topic.md)** (extends ADR-0004's per-conversation keying).
+
+### T48 — My-channels list endpoint (`GET /v1/channels`)
+- **Phase / owner:** Channel visibility / `backend-engineer`
+- **Depends on:** T18, T07, T10
+- **Scope (in):** `GET ""` collection route on the existing channels router (collision-free beside `POST ""`, `GET /public`, `GET /{channel_id}`); a `list_my_channels` service reusing the T18 `ChannelView(channel, member_count, my_role)` projection; cursor pagination over channel `(created_at, id)` DESC reusing the T07 utility unchanged (the T43 invites list is the reference implementation); `{ items, next_cursor }` envelope with items `{ id, name, is_private, created_by, created_at, member_count, my_role }`; query served by the existing `ix_channel_members_user` index.
+- **Scope (out):** WS membership events (T49); UI (T50); any schema change (none needed).
+- **Acceptance criteria:**
+  - [ ] A member sees every channel they belong to — public **and** private — each with `my_role`; channels they do not belong to never appear (F73).
+  - [ ] Empty membership → `{ items: [], next_cursor: null }` (non-error); malformed `cursor`/`limit` → 400 problem+json.
+  - [ ] Pagination follows ADR-0003 (default 50 / clamp 100; opaque cursor round-trips; stable under concurrent membership changes).
+  - [ ] LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** PRD R56; FS F73, Flow E; API contract `GET /v1/channels`; ADR-0003; DB design `ix_channel_members_user`.
+
+### T49 — Per-user WS topic + membership lifecycle events
+- **Phase / owner:** Channel visibility / `backend-engineer` (+ `security-reviewer`)
+- **Depends on:** T23, T24, T19
+- **Scope (in):** Four touch-points per ADR-0012: (1) `user:{user_id}` topic helper in `app/core/redis_keys.py`; (2) server-side auto-subscribe of every authenticated connection to its own per-user topic at connect in `app/ws/router.py` (no join frame; no other user's topic subscribable); (3) `user:*` pattern-subscription in the `app/ws/fanout.py` relay (mirrors the existing `presence:*` pattern); (4) publish `channel.member_added` (full channel summary) / `channel.member_removed` (channel id) **after commit** in the four membership mutation paths — self join, self leave, admin add, admin remove — using the contract envelope and ADR-0004's fail-open publish helper.
+- **Scope (out):** Deactivation-triggered removal (WS drop covers it, F25/F52); role-change events (explicit non-goal — API contract open question #5); frontend consumption (T51).
+- **Acceptance criteria:**
+  - [ ] An added user's *other* connection receives `channel.member_added` with the full channel summary, verified **cross-instance** (two app instances); a removed user's connections receive `channel.member_removed` (F74/F75).
+  - [ ] **Privacy assertion: no other user's connection receives either event** (per-user delivery isolation — the property that justifies ADR-0012 Option A over D).
+  - [ ] Events are emitted only after DB commit (persist-then-publish); Redis-down → the membership mutation still succeeds and the event is lost (fail-open), recovered by the T51 reconnect refetch.
+  - [ ] LINT, TYPE, TEST, SEC pass; `api-change-guard` satisfied.
+- **Refs:** PRD R57; FS F74/F75, Flow L; ADR-0012 (+ ADR-0004 persist-then-publish); API contract WS section.
+
+### T50 — Frontend: My Channels navigation list
+- **Owner:** `frontend-engineer` · **Depends on:** T08, T31, T48
+- **Scope (in):** `listMyChannels` client method + types (`CursorPage`-based, mirroring `adminApi.listInvites`); a `useMyChannels` hook following the `useChannelBrowse` template; the My Channels list as the primary logged-in navigation surface — placement decision owned here (the current shell is top-bar nav with no sidebar); rows navigate to the existing `/channels/:channelId` view; visibility (public/private) and own-role affordances; the "no channels joined" empty state (PRD §11) plus loading/error states.
+- **Scope (out):** Live updates (T51); a11y finishing sweep (T52).
+- **Acceptance:** List renders all memberships including private channels with role; navigation into a channel works; empty/loading/error states per PRD §11; LINT/TYPE/TEST (frontend) pass.
+- **Refs:** PRD R56, §11; FS F73; API contract `GET /v1/channels`.
+
+### T51 — Frontend: live channel-list updates
+- **Owner:** `frontend-engineer` · **Depends on:** T50, T49, T33
+- **Scope (in):** **App-level** (global) handling of `channel.member_added`/`channel.member_removed` — `useConversationSocket` is per-open-conversation, so membership events need a separate app-level listener path; idempotent insert/remove by channel id; graceful exit with a clear "you were removed from this channel" message when the removed channel is currently open (PRD §11 error state); my-channels refetch on WS reconnect (reusing the REST catch-up pattern — membership events have no replay).
+- **Scope (out):** a11y finishing sweep (T52).
+- **Acceptance:** A channel the user is added to (by an admin, or from another tab) appears live without refresh; a removed channel disappears live and an open view of it exits with the specific message; reconnect after missed events yields a correct list; unknown WS event types remain tolerated; LINT/TYPE/TEST pass.
+- **Refs:** PRD R57, §11; FS F74/F75, Flow L; API contract WS events; ADR-0012.
+
+### T52 — Accessibility pass (My Channels, WCAG 2.1 AA)
+- **Owner:** `accessibility-auditor` (+ `frontend-engineer`) · **Depends on:** T50, T51
+- **Scope (in):** Navigation/list semantics for the My Channels surface; keyboard nav; ARIA live-region announcements for channels appearing/disappearing (extends the existing live-region inventory); focus management when the currently-viewed channel is removed; contrast on visibility/role badges.
+- **Acceptance:** Automated a11y checks pass; keyboard-only navigation into/out of channels verified; live announcements for add/remove verified; focus behavior on removal verified; LINT/TYPE/TEST pass.
+- **Refs:** FS §9 (WCAG 2.1 AA); PRD §11; mirrors T36/T47.
+
+---
+
 ## Parallelizable tracks
 
 - **Wave M0** — T01→T02→T03→T04 is a serial spine; **T05, T06, T07 run in parallel** once T01 lands; **T08 (frontend skeleton) is fully independent** and can start on day 1.
@@ -542,11 +593,14 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 - **Frontend (M5)** runs as a **continuous parallel track** against the frozen API contract: T30 tracks M1, T31/T32 track M2, T33/T34 track M3, T35 tracks M4; T36 is a finishing sweep.
 - **Ship (M6)** — T37 can be built early (right after M0); T38 follows T37; **T39 and T40 parallel**; T41 is the final serial GA gate depending on the whole system.
 - **Wave M8** — **T43 and T44 run in parallel** (invite-list vs admin-users, different modules) once their deps (T13; T15/T19/T10) are met; frontend **T45 then T46** (T46 reuses T45's `AdminRoute`/nav/`adminApi`); T47 is a finishing a11y sweep after both screens. The whole milestone is off the critical path.
+- **Wave M9** — **T48 and T49 run in parallel** (REST read vs WS plumbing, different modules) once their deps (T18/T07/T10; T23/T24/T19) are met; frontend **T50 then T51** (T51 consumes T49's events through T50's list); T52 is a finishing a11y sweep after both. The whole milestone is off the critical path.
 
 **Critical path:** T01→T03→T04→T10→(T18→T19)→T21→T23→T24→T29→T41
 
-**Human 🔒 gates:** architecture sign-off already covers the design (TSD footer); additional 🔒 gates land at **T40** (prod/irreversible deploy config) and **T41** (GA go/no-go after load + restore drill). Every task touching auth/PII/secrets (T09, T10, T11, T12, T13, T14, T15, T16, T20, T27, T28, T42, T43, T44) routes through the security-reviewer/secret-scan gate.
+**Human 🔒 gates:** architecture sign-off already covers the design (TSD footer); additional 🔒 gates land at **T40** (prod/irreversible deploy config) and **T41** (GA go/no-go after load + restore drill). Every task touching auth/PII/secrets (T09, T10, T11, T12, T13, T14, T15, T16, T20, T27, T28, T42, T43, T44, T48, T49) routes through the security-reviewer/secret-scan gate — T48/T49 because they expose private-channel metadata over a new caller-scoped read and a new push surface.
 
 **M7 addenda note:** T42 is not on the critical path and has no downstream dependents — it's a standalone fix for a gap found post-implementation (ADR-0011), safe to schedule whenever convenient once T16 and T30 are both merged.
 
 **M8 addenda note:** T43–T47 close a frontend traceability gap found post-implementation (admin capabilities were specified only as backend behavior; the screens and their backing reads were never scoped — PRD v2 §11, R54/R55, F71/F72). Off the critical path, no downstream dependents. T44 also lands the deactivate/reactivate endpoints originally scoped as T20 (in `app/api/admin.py`). Schedulable once T13/T15/T19 are merged.
+
+**M9 addenda note:** T48–T52 close a traceability gap found post-implementation: a user added to a private channel had no way to see it — the public browse (F30) excludes own memberships, and no "list my channels" read or membership-change propagation was ever specified (PRD v3 R56/R57, FS F73–F75, ADR-0012). Off the critical path, no downstream dependents, **no schema change** (`ix_channel_members_user` already serves the read). Schedulable once T18/T19/T23/T24 are merged.

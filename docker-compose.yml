@@ -138,8 +138,8 @@ services:
       SMTP_USE_TLS: "false"
       SMTP_START_TLS: "false"
 
-      PASSWORD_RESET_URL_BASE: ${PASSWORD_RESET_URL_BASE:-http://localhost:5173/reset-password}
-      INVITE_URL_BASE: ${INVITE_URL_BASE:-http://localhost:5173/accept-invite}
+      PASSWORD_RESET_URL_BASE: ${PASSWORD_RESET_URL_BASE:-http://localhost:5173/password-reset/confirm}
+      INVITE_URL_BASE: ${INVITE_URL_BASE:-http://localhost:5173/register}
 
       S3_ENDPOINT_URL: http://minio:9000
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-chatspace-media}

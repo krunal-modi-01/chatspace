@@ -31,6 +31,7 @@ This specification defines the behavior of **chatspace v1**, a single-workspace,
 | Deactivate / reactivate a user | ❌ | ❌ | ❌ | ❌ | ❌ | — | ✅ |
 | Create a channel | — | — | ✅ | ✅ | ✅ | — | ✅ |
 | Browse / join a public channel | — | — | ✅ | ✅ | ✅ | — | ✅ |
+| List own channels ("My channels") | ❌ | — | ✅ | ✅ | ✅ | — | ✅ |
 | Leave a channel | — | — | — | ✅ | ✅¹ | — | — |
 | Read/post in a channel | ❌ | — | ❌ | ✅ | ✅ | — | — |
 | Add/remove members, set roles (own channel) | — | — | ❌ | ❌ | ✅ | — | — |
@@ -117,6 +118,9 @@ This specification defines the behavior of **chatspace v1**, a single-workspace,
 | F70 | R41 | REST errors use RFC 7807 `application/problem+json` with standard statuses; WebSocket uses a documented close-code/reason scheme. | Any error response. | Errors returned in the standard shape with the correct status/close code. |
 | F71 | R54 | A System Admin can retrieve a paginated list of invites (email, status, expiry, issued_at), filterable by status (`pending`/`accepted`/`revoked`/`expired`); backs the Invite Management screen (PRD §11). | System Admin requesting the invite list. | List returned paginated with per-invite status; a non-admin caller → `403`; the raw invite token is never included (F68/R24). |
 | F72 | R55 | A System Admin can retrieve a paginated, searchable list of users (id, first/last name, username, email, role, `is_active`, `last_seen`); search matches name/username/email; includes active and deactivated users; backs the User Management screen (PRD §11). | System Admin requesting/searching the user list. | Matching users returned paginated; a non-admin caller → `403`; no password hash or other secret material in the response (§8). |
+| F73 | R56 | An active user retrieves a cursor-paginated list of every channel they are a member of — public **and** private — with name, visibility, member count, and their own role; backs the primary logged-in navigation surface (PRD §11). | Authenticated, active. | `{ items, next_cursor }` over the caller's own memberships only; channels the caller does not belong to never appear; empty membership → empty, non-error page. |
+| F74 | R57 | When a user is added to a channel (self-join or channel-admin add) and the membership is committed, each of that user's open authenticated WebSocket connections receives a `channel.member_added` event carrying the channel summary, via that user's per-user topic. | Membership creation committed; target user has ≥1 open authenticated connection. | Event delivered to the affected user's connections only (no other user receives it); clients insert the channel idempotently by id. Events are at-least-once with **no replay** — a disconnected client recovers via a channel-list refetch on reconnect. |
+| F75 | R57 | When a user is removed from a channel (self-leave or channel-admin remove) and the change is committed, each of that user's open connections receives a `channel.member_removed` event; clients drop the channel from the list and exit any open view of it gracefully. | Membership removal committed; target user has ≥1 open authenticated connection. | Event delivered to the affected user's connections only. Deactivation-triggered removal emits no event (connections are dropped, F25/F52); role-only changes emit no event (role display self-heals on the next list fetch). |
 
 ## 4. User flows
 
@@ -175,19 +179,21 @@ This specification defines the behavior of **chatspace v1**, a single-workspace,
 4. (Reactivate) System Admin reactivates U → U.is_active = true; U can log in with a fresh session; prior sessions are not restored.
 ```
 
-### Flow E — Create / browse / join / leave channel (F29–F37, R4/R5/R6/R49/R50/R51)
+### Flow E — Create / browse / join / leave channel (F29–F37, F73, R4/R5/R6/R49/R50/R51/R56)
 ```
 1. Active user creates a channel (public or private) with a valid, workspace-unique name.
    1a. Name invalid/duplicate → 422 / 409.
 2. System stores the channel and records the creator as its admin.
-3. User browses the paginated public-channel list (channels they are not yet a member of).
-4. User joins a public channel directly → becomes a member.
-   4a. Private channel: only a Channel Admin may add members; non-admin self/other add → 403.
-5. Channel Admin adds/removes members and assigns member/admin roles within the channel.
-   5a. Channel currently has zero admins → membership/role changes blocked until an admin returns.
-6. Member (incl. admin) leaves a channel.
-   6a. Leaver is the sole admin and other members remain → promote earliest-joined_at member to admin, THEN remove leaver's membership (Flow F).
-   6b. Leaver is the sole admin and no other members remain → membership removed; channel persists with zero admins (terminal state).
+3. User retrieves their own channel list ("My channels": every public + private membership, cursor-paginated) (F73).
+4. User browses the paginated public-channel list (channels they are not yet a member of).
+5. User joins a public channel directly → becomes a member.
+   5a. Private channel: only a Channel Admin may add members; non-admin self/other add → 403.
+6. Channel Admin adds/removes members and assigns member/admin roles within the channel.
+   6a. Channel currently has zero admins → membership/role changes blocked until an admin returns.
+   6b. Membership add/remove is propagated live to the affected user's channel list (Flow L).
+7. Member (incl. admin) leaves a channel.
+   7a. Leaver is the sole admin and other members remain → promote earliest-joined_at member to admin, THEN remove leaver's membership (Flow F).
+   7b. Leaver is the sole admin and no other members remain → membership removed; channel persists with zero admins (terminal state).
 ```
 
 ### Flow F — Last-admin succession (F36–F37, R51)
@@ -263,6 +269,19 @@ This specification defines the behavior of **chatspace v1**, a single-workspace,
 5. Client merges and dedups by message id so duplicates from at-least-once delivery are collapsed.
 ```
 
+### Flow L — Membership change → live channel-list update (F74–F75, R57)
+```
+1. A membership change for user U commits (self join/leave, or channel-admin add/remove).
+2. System publishes a membership event to U's per-user topic AFTER the commit (persist-then-publish).
+   - channel.member_added carries the channel summary; channel.member_removed carries the channel id.
+3. Each app instance relays the event to U's locally connected clients only — no other user's connection receives it.
+4. U's clients update the channel list idempotently by channel id (insert on added, remove on removed).
+   4a. U is currently viewing the removed channel → the open view is exited gracefully with a clear "you were removed from this channel" message.
+5. Membership events are at-least-once with NO replay: after a disconnect, U's client refetches the channel list on reconnect (F73) instead of expecting missed events.
+   (Excluded) Deactivation-triggered removal emits no membership event — the target's connections are dropped (Flow D, F52).
+   (Excluded) Role-only changes emit no event; the displayed role self-heals on the next list fetch.
+```
+
 ## 5. Business rules
 
 **Configurable limits & policy defaults (PRD §5a — defaults, tunable during design; not open product questions):**
@@ -278,6 +297,7 @@ This specification defines the behavior of **chatspace v1**, a single-workspace,
 - **Signed media URL TTL:** 5 min — defines the media revocation-lag bound (R32).
 - **Typing-indicator auto-expire:** 5 s after last keystroke (R19).
 - **Public-channel list page size:** 50, paginated (R49).
+- **My-channels list page size:** 50, cursor-paginated (R56).
 
 **Identity & uniqueness:**
 - Email and username are unique across the workspace (DB constraint) and immutable after registration; only display name (first/last) and avatar are editable (R1/R27).
@@ -296,6 +316,7 @@ This specification defines the behavior of **chatspace v1**, a single-workspace,
 - Public channels are joinable directly; private-channel membership is admin-gated (R5).
 - **Last-admin succession:** when a channel's only admin leaves or is deactivated, the longest-standing remaining member (earliest `joined_at`) is auto-promoted to admin **before** the departure completes (R51).
 - **Zero-admin channel is a valid terminal state:** if no members remain, the channel persists with zero admins (never archived/deleted); its membership/roles cannot change until it regains an admin (R51).
+- **Membership events** (`channel.member_added` / `channel.member_removed`) are published only after the membership change is committed (persist-then-publish) and are delivered only to the affected user's own connections; they carry no replay — a reconnecting client refetches its channel list (R57).
 
 **Authorization & privacy:**
 - The server validates channel/DM membership on every message read/write and every media fetch; a client-supplied channel_id is never trusted alone (R7).
@@ -352,6 +373,9 @@ This specification defines the behavior of **chatspace v1**, a single-workspace,
 | Leaving a channel as its sole admin (other members exist) | Earliest-joined_at member promoted to admin first, then membership removed (F36). |
 | Leaving a channel as its sole admin (no other members) | Membership removed; channel persists with zero admins (terminal state) (F37). |
 | Mutation attempted on a zero-admin channel | Blocked until the channel regains an admin (F33/F37). |
+| User added to a channel while offline/disconnected | Channel appears on the next channel-list fetch / reconnect refetch — membership events have no replay (F73/F74). |
+| User removed from a channel they are currently viewing | Channel removed from the list live; the open view is exited gracefully with a clear message (F75). |
+| Redis unavailable when a membership change commits | Membership event lost (fail-open); the membership itself is durable and the list is corrected on the next fetch/reconnect refetch — same recovery class as message catch-up (F55/F74/F75). |
 | Over per-user message send rate limit | `429` + `Retry-After` until token-bucket refill (F63). |
 | Over per-IP+identifier auth rate limit | `429` regardless of whether the identifier exists (no enumeration) (F64). |
 | Over per-user upload rate limit | `429` (F62). |
@@ -545,6 +569,14 @@ This specification defines the behavior of **chatspace v1**, a single-workspace,
 - Given a System Admin searches users by name/username/email, Then matching users (active and deactivated) are returned paginated with id, name, username, email, role, `is_active`, and `last_seen`, and no password material.
 - Given a non-System-Admin requests the invite list or the user list, Then the request is rejected with `403`.
 - Given the invite or user list is empty, Then an empty, non-error result is returned.
+
+**F73–F75 · My channels & live membership (R56/R57)**
+- Given an authenticated, active user, When they request their channel list, Then every channel they belong to — public **and** private — is returned cursor-paginated with name, visibility, member count, and their own role; channels they do not belong to never appear.
+- Given a user with no memberships, When they request their channel list, Then an empty, non-error page is returned.
+- Given user U with an open WebSocket connection, When U is added to a channel (self join or admin add) and the change commits, Then all of U's connected clients receive `channel.member_added` with the channel summary and show the channel without a refresh.
+- Given user U with an open WebSocket connection, When U is removed from a channel (self leave or admin remove), Then all of U's connected clients receive `channel.member_removed`, drop the channel from the list, and exit any open view of it gracefully.
+- Given a membership change affecting U, Then no other user's connection receives the event (per-user delivery only).
+- Given membership events were missed while U was disconnected, When U's client reconnects, Then it refetches the channel list and reflects the correct memberships (no event replay is provided).
 
 ## 9. Assumptions & dependencies
 

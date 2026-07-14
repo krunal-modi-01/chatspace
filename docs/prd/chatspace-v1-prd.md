@@ -1,7 +1,15 @@
 # PRD — chatspace v1 (Final)
 
 > Owner: `product-manager` agent (+ human PM approval). Downstream: `business-analyst`, `architect`.
-> Status: Approved · Ticket: <link> · Last updated: 2026-07-08 · Version: 2
+> Status: Approved · Ticket: <link> · Last updated: 2026-07-13 · Version: 3
+
+> **v3 revision note.** Added **R56** (list own channels — the "My channels" list) and **R57**
+> (live membership propagation over WebSocket), with matching acceptance criteria (§6), a §5a
+> page-size default, a §5c matrix row, and §11 UX updates. This closes a traceability gap of
+> the same class as v2's R54/R55: a user added to a private channel had no way to *see* it —
+> the public-channel browse (R49) explicitly excludes own memberships, and no "my channels"
+> read was ever specified. No capability semantics change; no schema change
+> (`ix_channel_members_user` already serves this read). New ADR-0012 (per-user WS topic).
 
 > **v2 revision note.** Added the **System Admin screen inventory** (§11), the Priya→screen
 > mapping (§3), and two admin **read** requirements — **R54** (list invites) and **R55**
@@ -181,6 +189,10 @@ with the product mostly through its operational and security guarantees.
 - As a team member, I want to **create a public or private channel** so that my team
   (or an ad-hoc group) has a dedicated space — and I become its admin.
 - As a team member, I want to **browse a list of public channels** so I can find one to join.
+- As a team member, I want to **see the list of channels I belong to** (public and private) so
+  that I can navigate my conversations — including a private channel someone just added me to.
+- As a team member added to (or removed from) a channel, I want my channel list to **update
+  live without a refresh** so that I never have to guess whether I can see a conversation.
 - As a team member, I want to **join a public channel** so that I can participate.
 - As a team member, I want to **leave a channel** I no longer need.
 - As a channel admin, I want to **add/remove members of my channel and assign
@@ -243,7 +255,7 @@ with the product mostly through its operational and security guarantees.
 | R14 | Presence: live online/offline in Redis (ephemeral); `last_seen` persisted durably (Postgres) | Must | See R43/R44. |
 | R15 | Real-time delivery of new messages, edits, and deletions over WebSocket without refresh | Must | Extended in this revision to include edits/deletes (was new-message-only in v2). |
 | R16 | WebSocket authenticates via access token before joining any channel; re-validated periodically so revoked/expired/deactivated-user tokens are dropped mid-connection | Must | Ties to R35, R47 (deactivation). |
-| R17 | Real-time broadcast works across >1 app instance via Redis pub/sub fan-out | Must | Includes edit/delete events (R52). |
+| R17 | Real-time broadcast works across >1 app instance via Redis pub/sub fan-out | Must | Includes edit/delete events (R52) and membership events (R57). |
 | R18 | At-least-once **delivery** with client-side dedup by message id | Must | Duplicate *creation* handled by R38. |
 | R19 | Typing indicators for channels and DMs over WebSocket | Should | Ephemeral, auto-expiring. |
 | R20 | Token-bucket rate limiting: per-user on message send; **per-IP + per-attempted-identifier** on auth endpoints (login, register-via-invite, password-reset request, refresh) | Must | Must not enable user enumeration. Defaults §5a. |
@@ -275,13 +287,15 @@ with the product mostly through its operational and security guarantees.
 | R46 | **System Admin role & bootstrap** — a workspace-level role, separate from Channel Admin, granted only R45 (invite) and R47 (deactivate/reactivate) powers; **no** special channel/message access. Exactly one default System Admin account is created automatically at first deployment (bootstrap), so an invite-issuer always exists | Must (new) | Bootstrap mechanism (env var / first-run CLI / setup wizard) is an architect decision; must not be skippable, to avoid a zero-admin deployment. |
 | R47 | **User deactivation/reactivation** — a System Admin can deactivate an active user (blocks login, invalidates all of that user's active sessions immediately, drops open WebSocket connections) and reactivate a deactivated user (restores login ability; does not restore old sessions) | Must (new) | A deactivated user's prior messages/channel memberships are **retained as-is** (not deleted, not anonymized) — Assumption, confirm with PM if different retention is wanted. |
 | R48 | **Self-service password reset** — a user requests a reset via their registered (verified) email; the system emails a single-use, time-limited reset link; submitting a new password via a valid link sets it and **invalidates all of the user's other active sessions** (same effect as R29) | Must (new) | Must not reveal whether an email exists in the system (uniform response). Default token expiry §5a. |
-| R49 | **Browse public channels** — an authenticated, active user can retrieve a list of public channels (name; member count optional) they are not yet a member of, and join directly from it | Must (new) | Not full-text search — a plain list, pagination per §5b if the list is large. |
+| R49 | **Browse public channels** — an authenticated, active user can retrieve a list of public channels (name; member count optional) they are not yet a member of, and join directly from it | Must (new) | Not full-text search — a plain list, pagination per §5b if the list is large. Own memberships are listed via R56. |
 | R50 | **Leave a channel** — any member (including an admin) may leave a channel they belong to | Must (new) | If the leaving member is the channel's only admin, R51 applies before membership is removed. |
 | R51 | **Last-admin succession** — when a channel's only admin leaves (R50) or is deactivated (R47), the system automatically promotes the **longest-standing remaining member** (earliest `joined_at`) to admin. If no other members remain, the channel persists with **zero admins** (not archived, not deleted) | Must (new) | A channel with zero admins cannot have its membership/roles changed until it regains an admin via this rule or via a future moderation feature. |
 | R52 | **Live propagation of edits/deletes** — when a message is edited or soft-deleted, all clients with an open WebSocket to that channel/DM receive an update event (not just new-message events) and update their view without a refresh | Must (new) | Same transport/fan-out as R15/R17; extends R9/R10. |
 | R53 | **EXIF metadata stripping** — uploaded images have EXIF metadata (including GPS location) stripped server-side before storage; the visual image content itself is not otherwise altered (not "processing" per the non-goals) | Must (new) | Applies to the image allowlist only (R31); does not apply to video or file attachments. |
 | R54 | **List invites (admin)** — a System Admin can retrieve a paginated list of invites (email, status, expiry, issued_at), filterable by status (`pending`/`accepted`/`revoked`/`expired`); backs the Invite Management screen (§11) | Must (new) | System-Admin only (non-admin → `403`). **Raw invite token never returned** (R24). Pagination per §5b. |
 | R55 | **List/search users (admin)** — a System Admin can retrieve a paginated, searchable list of users (id, first/last name, username, email, role, `is_active`, `last_seen`); search matches name/username/email; backs the User Management screen (§11) | Must (new) | System-Admin only (non-admin → `403`). **Password hash never returned** (§8). Pagination per §5b; includes both active and deactivated users. |
+| R56 | **List own channels ("My channels")** — an authenticated, active user can retrieve a paginated list of every channel (public **and** private) they are a member of, with name, visibility, member count, and their own role; backs the primary logged-in navigation surface (§11) | Must (new) | Complements R49, which excludes own memberships. Cursor pagination per §5b (ADR-0003). Served by the existing `ix_channel_members_user` index — no schema change. |
+| R57 | **Live membership propagation** — when a user is added to or removed from a channel (self join/leave or channel-admin add/remove), all of that user's connected clients receive a WebSocket event and update their channel list without a refresh | Must (new) | Same transport/fan-out family as R15/R17/R52, delivered on a per-user topic (ADR-0012). Deactivation-triggered removal excluded (connections are dropped per R16/R47); role-only changes emit no event (list self-heals on next fetch) — see FS F74/F75. |
 
 ### §5a — Configurable limits (defaults; confirm/tune during design — not open product questions)
 
@@ -306,6 +320,7 @@ with the product mostly through its operational and security guarantees.
 | Per-user upload rate limit | 20 uploads / min | R42. |
 | Typing-indicator auto-expire | 5 s after last keystroke | R19. |
 | Public-channel list page size | 50 (paginated per §5b if more) | R49. |
+| My-channels list page size | 50 (cursor per §5b) | R56. |
 
 ### §5b — API & error-format expectations (normative baseline)
 
@@ -328,6 +343,7 @@ with the product mostly through its operational and security guarantees.
 | Deactivate / reactivate a user | ❌ | ❌ | ❌ | ❌ | ❌ | — | ✅ |
 | Create a channel | — | — | ✅ | ✅ | ✅ | — | ✅ |
 | Browse / join a public channel | — | — | ✅ | ✅ | ✅ | — | ✅ |
+| List own channels ("My channels") | ❌ | — | ✅ | ✅ | ✅ | — | ✅ |
 | Leave a channel | — | — | — | ✅ | ✅¹ | — | — |
 | Read/post in a channel | ❌ | — | ❌ | ✅ | ✅ | — | — |
 | Add/remove members, set roles (own channel) | — | — | ❌ | ❌ | ✅ | — | — |
@@ -363,6 +379,14 @@ with the product mostly through its operational and security guarantees.
 - Given a non-System-Admin requests the invite list or the user list, Then the request is rejected with `403`.
 - Given a System Admin searches users by name, username, or email, Then matching users — **both active and deactivated** — are returned paginated, each with id, name, username, email, role, `is_active`, and `last_seen`, and **no password material**.
 - Given the user or invite list is empty, Then an empty, non-error result is returned (rendered as the §11 empty state).
+
+**R56 / R57 — My channels & live membership**
+- Given an authenticated, active user, When they request their channel list, Then every channel they are a member of — public **and** private — is returned paginated, each with name, visibility, member count, and their own role; channels they do not belong to never appear.
+- Given a user with no memberships, When they request their channel list, Then an empty, non-error result is returned (rendered as the §11 "no channels joined" empty state).
+- Given a user with an open WebSocket connection, When they are added to a channel (self join or admin add), Then the channel appears in their channel list live, without a refresh, on every connected client/tab.
+- Given a user with an open WebSocket connection, When they are removed from a channel (self leave or admin remove), Then the channel disappears from their channel list live, and any open view of that channel is exited gracefully.
+- Given membership events were missed while a client was disconnected, When the client reconnects, Then it refetches the channel list and shows the correct memberships (no event replay is provided).
+- Given a membership change affecting user A, Then no other user's connection receives the membership event.
 
 **R2 / R3 / R35 — Login, tokens, authenticated access**
 - Given valid credentials for an **active** account, When a user logs in, Then a short-lived access token and a refresh token are returned.
@@ -552,9 +576,9 @@ complexity. Re-evaluate via ADR when real usage data warrants it.
 **Visual tone / reference product.** Premium, minimal, and information-dense in the working app — closer to Linear/Raycast than a marketing site — with a distinctive ambient identity on low-density auth/onboarding surfaces (soft gradient/noise atmosphere), not decorative chrome throughout. No illustration/imagery beyond avatars. **Light and dark themes are both in scope** (system-preference default, user-toggleable, persisted) — supersedes the earlier "light mode only" note now that dark mode is explicitly directed. Full palette, type/spacing scale, elevation, motion tokens, and component states are defined in [`architecture/design-tokens.md`](../../architecture/design-tokens.md) — `frontend-engineer` must treat that file as a required input alongside this PRD, not optional polish.
 
 **UX states (responsive web; native mobile client remains a non-goal).**
-- **Empty states:** no channels joined, empty channel, no DMs, empty public-channel list, no pending invites, no avatar (initials badge).
-- **Loading states:** history fetch, message send (optimistic + pending), media upload (progress + cancel), invite send (pending confirmation).
-- **Error states** (mapped from RFC 7807): send failure (retry), upload rejected (size/type reason), rate-limited (cooldown), session expired (re-login), account deactivated (clear message, not a generic login failure), expired/used invite or reset link (clear message + path to request a new one), offline/reconnecting banner.
+- **Empty states:** no channels joined (the empty state of the R56 "My channels" list — the primary logged-in navigation surface), empty channel, no DMs, empty public-channel list, no pending invites, no avatar (initials badge).
+- **Loading states:** channel-list fetch, history fetch, message send (optimistic + pending), media upload (progress + cancel), invite send (pending confirmation).
+- **Error states** (mapped from RFC 7807): send failure (retry), upload rejected (size/type reason), rate-limited (cooldown), session expired (re-login), account deactivated (clear message, not a generic login failure), expired/used invite or reset link (clear message + path to request a new one), removed from the channel currently being viewed (clear "you were removed from this channel" message + return to the channel list, R57), offline/reconnecting banner.
 - **Validation messages:** inline for registration, password change/reset, channel creation, message length, invite email format.
 - **Accessibility.** Target **WCAG 2.1 AA** (keyboard nav, focus management on new/live-updated messages, ARIA live-region for incoming messages/typing/edits/deletes, contrast, alt text). *(Default — confirm with PM/UX if a different bar is required.)*
 - **Timezones.** Server stores UTC; client renders local/relative time.

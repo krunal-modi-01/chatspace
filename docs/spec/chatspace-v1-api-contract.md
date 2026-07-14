@@ -2,16 +2,16 @@
 
 > Owner: `api-reviewer` (+ `backend-engineer`). Guarded by `api-change-guard` hook. Source of truth: the OpenAPI/proto/GraphQL file; this doc is the human-readable companion.
 
-**Status: Draft** · Version: `1.0.0` · Base path: `/v1` · Traces to: [`chatspace-v1-functional-spec.md`](chatspace-v1-functional-spec.md) (F1–F70), [`chatspace-v1-technical-spec.md`](chatspace-v1-technical-spec.md) §5 · ADRs: [0002](../../architecture/adr/0002-dm-data-model.md) · [0003](../../architecture/adr/0003-cursor-pagination.md) · [0004](../../architecture/adr/0004-realtime-delivery-fanout.md) · [0005](../../architecture/adr/0005-message-id-scheme.md) · [0006](../../architecture/adr/0006-revocable-sessions.md) · [0007](../../architecture/adr/0007-media-object-storage.md)
+**Status: Draft** · Version: `1.1.0` · Base path: `/v1` · Traces to: [`chatspace-v1-functional-spec.md`](chatspace-v1-functional-spec.md) (F1–F75), [`chatspace-v1-technical-spec.md`](chatspace-v1-technical-spec.md) §5 · ADRs: [0002](../../architecture/adr/0002-dm-data-model.md) · [0003](../../architecture/adr/0003-cursor-pagination.md) · [0004](../../architecture/adr/0004-realtime-delivery-fanout.md) · [0005](../../architecture/adr/0005-message-id-scheme.md) · [0006](../../architecture/adr/0006-revocable-sessions.md) · [0007](../../architecture/adr/0007-media-object-storage.md) · [0012](../../architecture/adr/0012-per-user-websocket-topic.md)
 
 ## Overview
 
 This contract defines the complete v1 surface for **chatspace**, a single-workspace, self-hostable Slack-style team chat.
 
 - **Purpose:** the promise made to every current and future consumer (React SPA today; future clients) of the chatspace backend. It covers authentication & sessions, invites, profile, channels & membership, channel messages, 1:1 DMs, media, workspace admin, and the real-time WebSocket surface.
-- **Style:** hybrid — **REST (JSON)** for all CRUD, history, auth, invites, admin, and media control-plane; **WebSocket (WSS)** for real-time only (new message / edit / delete, typing, presence). This split is mandated by `CLAUDE.md` conventions and TSD §5.
+- **Style:** hybrid — **REST (JSON)** for all CRUD, history, auth, invites, admin, and media control-plane; **WebSocket (WSS)** for real-time only (new message / edit / delete, typing, presence, membership lifecycle). This split is mandated by `CLAUDE.md` conventions and TSD §5.
 - **Base path:** all REST routes are under `/v1`; the WebSocket endpoint is `/v1/ws`.
-- **Version:** `1.0.0`. The URI major version (`/v1`) is the compatibility boundary.
+- **Version:** `1.1.0`. The URI major version (`/v1`) is the compatibility boundary.
 
 All request/response bodies use **snake_case** JSON (matches Python/Pydantic). All timestamps are **ISO-8601 UTC** (e.g. `2026-07-02T14:31:07.482Z`); clients render local/relative time. Password hashes, JWT signing material, refresh-token internals, invite tokens, and reset tokens are **never** returned in list/read responses and **never** logged.
 
@@ -33,7 +33,7 @@ All request/response bodies use **snake_case** JSON (matches Python/Pydantic). A
   ```
   `type`, `title`, `status`, `detail`, `instance`, and `correlation_id` are always present; `errors` (a field-level list) appears only on `400`/`422` validation failures. `correlation_id` is the non-PII request id also emitted on every log line (F68). Error bodies never contain message content, PII, tokens, or secrets. Non-enumerating endpoints (auth, password-reset, invite redemption) return a uniform response regardless of whether the identifier exists (F11, F15, F64). Below, "**problem+json**" in a Body column means a body of this shape.
 - **Pagination:** two documented styles.
-  - **Cursor (keyset)** for message and DM history (ADR-0003): query `?limit=&cursor=`; response `{ "items": [...], "next_cursor": "<opaque|null>" }`. The cursor is an **opaque base64url token** over `(created_at, id)`; clients MUST treat it as opaque and never construct it. `next_cursor` is `null` at the end of the stream. `items.length <= limit` is expected — soft-deleted rows are excluded by the query predicate (F44), so a page can be shorter than `limit` without meaning end-of-stream. Default `limit` 50, server maximum `limit` 100 (a larger request is clamped to 100). Reconnect catch-up (F55) reuses the same endpoint with `cursor` set from the last received message id.
+  - **Cursor (keyset)** for message and DM history, the caller's channel list (`GET /v1/channels`), and the admin invite/user lists (ADR-0003): query `?limit=&cursor=`; response `{ "items": [...], "next_cursor": "<opaque|null>" }`. The cursor is an **opaque base64url token** over `(created_at, id)`; clients MUST treat it as opaque and never construct it. `next_cursor` is `null` at the end of the stream. `items.length <= limit` is expected — soft-deleted rows are excluded by the query predicate (F44), so a page can be shorter than `limit` without meaning end-of-stream. Default `limit` 50, server maximum `limit` 100 (a larger request is clamped to 100). Reconnect catch-up (F55) reuses the same endpoint with `cursor` set from the last received message id.
   - **Offset** for the public-channel browse list only (F30, §5a): query `?limit=&offset=`; response `{ "items": [...], "total": <int>, "limit": <int>, "offset": <int> }`. Page size default and maximum are **50**.
 - **Idempotency:** message-create (`POST /v1/channels/{channel_id}/messages` and `POST /v1/dms/{user_id}/messages`) accepts an `Idempotency-Key` header (client-generated UUID; F40, ADR-0004). The first request with a given `(sender_id, key)` creates exactly one row and returns `201`; any replay of the same key returns the original message with `200` and creates no duplicate. A malformed/absent key on message-create is rejected with `400` (the key is required so retried sends are always safe under at-least-once delivery). GET/DELETE/PATCH are idempotent by HTTP semantics and do not take the header.
 - **Rate limits:** Redis token-bucket (F63, F64, F62). Message send: **10 / 10 s per user, burst 20**. Auth endpoints (login, register, refresh, password-reset request): **5 / 5 min per IP + attempted identifier**, keyed so it never reveals whether the identifier exists. Media upload: **20 / min per user**. Over-limit responses are `429 Too Many Requests` with a `Retry-After` header (seconds) and a problem+json body. Limits are documented per client and enforced server-side.
@@ -208,6 +208,22 @@ All request/response bodies use **snake_case** JSON (matches Python/Pydantic). A
   | 422 | Invalid email | problem+json |
   | 502 | Email delivery unreachable — fail loudly (F1, Flow A.1c) | problem+json |
 
+### `GET /v1/invites`
+- **Purpose:** Cursor-paginated list of invites (email, status, expiry, issued_at), optionally filtered by status, backing the Invite Management screen (F71, PRD §11). Added post-M8 to document shipped T43 behavior.
+- **Auth / scope:** Bearer; **`system_admin`** only.
+- **Idempotent:** Yes (safe read).
+- **Request:** _(query: `?status=pending|accepted|revoked|expired&limit=50&cursor=<opaque|null>`)_
+```json
+{}
+```
+- **Responses:**
+  | Status | Meaning | Body |
+  |--------|---------|------|
+  | 200 | Invite page (empty list is a non-error result) | `{ items: [ { id, email, status, expiry, issued_at } ], next_cursor }` — the raw token is **never** included (R24) |
+  | 400 | Invalid `status`/`limit`/`cursor` | problem+json |
+  | 401 | Auth | problem+json |
+  | 403 | Caller is not a System Admin | problem+json |
+
 ### `GET /v1/invites/{token}`
 - **Purpose:** Validate an invite token and return the locked email so the registration form can pre-fill (F4). Does not consume the token.
 - **Auth / scope:** Public (the token is the credential).
@@ -304,6 +320,21 @@ All request/response bodies use **snake_case** JSON (matches Python/Pydantic). A
   | 409 | Channel name already exists in workspace (Flow E.1a) | problem+json |
   | 422 | Name invalid (length 1–80, allowed charset) | problem+json |
 
+### `GET /v1/channels`
+- **Purpose:** Cursor-paginated list of every channel — public **and** private — the caller is a member of: the "My channels" navigation read (F73). Complements `GET /v1/channels/public`, which excludes own memberships. Ordered by channel `(created_at, id)` descending; a small membership set typically fits one page.
+- **Auth / scope:** Bearer; any active user (scoped to the caller — no other user's memberships are reachable).
+- **Idempotent:** Yes (safe read).
+- **Request:** _(query: `?limit=50&cursor=<opaque|null>`)_
+```json
+{}
+```
+- **Responses:**
+  | Status | Meaning | Body |
+  |--------|---------|------|
+  | 200 | My-channels page (empty list is a non-error result) | `{ items: [ { id, name, is_private, created_by, created_at, member_count, my_role } ], next_cursor }` |
+  | 400 | Invalid `limit`/`cursor` | problem+json |
+  | 401 | Auth | problem+json |
+
 ### `GET /v1/channels/public`
 - **Purpose:** Offset-paginated browse of public channels the caller is **not** yet a member of, for direct join (F30). Page size 50.
 - **Auth / scope:** Bearer; any active user.
@@ -335,7 +366,7 @@ All request/response bodies use **snake_case** JSON (matches Python/Pydantic). A
   | 404 | Not found, or private channel the caller cannot see (uniform) | problem+json |
 
 ### `POST /v1/channels/{channel_id}/join`
-- **Purpose:** Join a **public** channel directly, becoming a `member` (F31).
+- **Purpose:** Join a **public** channel directly, becoming a `member` (F31). After commit, publishes `channel.member_added` to the caller's `user:{user_id}` topic (F74, ADR-0012) so their other tabs update live.
 - **Auth / scope:** Bearer; any active user. Private channels are join-by-admin only (see membership endpoints).
 - **Idempotent:** Yes (already a member → `200` with current membership, no duplicate row).
 - **Request:**
@@ -351,7 +382,7 @@ All request/response bodies use **snake_case** JSON (matches Python/Pydantic). A
   | 404 | No such public channel (uniform for private) | problem+json |
 
 ### `POST /v1/channels/{channel_id}/leave`
-- **Purpose:** Leave a channel the caller belongs to. If the caller is the sole admin and other members remain, the earliest-`joined_at` member is promoted to admin **before** removal (F35, F36); if none remain, the channel persists with zero admins (F37).
+- **Purpose:** Leave a channel the caller belongs to. If the caller is the sole admin and other members remain, the earliest-`joined_at` member is promoted to admin **before** removal (F35, F36); if none remain, the channel persists with zero admins (F37). After commit, publishes `channel.member_removed` to the caller's `user:{user_id}` topic (F75, ADR-0012).
 - **Auth / scope:** Bearer; caller must be a member.
 - **Idempotent:** Yes (not a member → `204`; succession runs at most once).
 - **Request:**
@@ -382,7 +413,7 @@ All request/response bodies use **snake_case** JSON (matches Python/Pydantic). A
   | 404 | No such channel (uniform) | problem+json |
 
 ### `POST /v1/channels/{channel_id}/members`
-- **Purpose:** A Channel Admin adds a user to the channel (the only way into a private channel; F32, F33).
+- **Purpose:** A Channel Admin adds a user to the channel (the only way into a private channel; F32, F33). After commit, publishes `channel.member_added` to the **added user's** `user:{user_id}` topic (F74, ADR-0012) so their channel list updates live.
 - **Auth / scope:** Bearer; caller must be an `admin` of this channel and the channel must currently have ≥1 admin (F33).
 - **Idempotent:** Yes (already a member → `200`, no duplicate).
 - **Request:**
@@ -420,7 +451,7 @@ All request/response bodies use **snake_case** JSON (matches Python/Pydantic). A
   | 422 | Invalid `role` | problem+json |
 
 ### `DELETE /v1/channels/{channel_id}/members/{user_id}`
-- **Purpose:** A Channel Admin removes a member from the channel (F33). Removing the sole admin triggers succession per F36.
+- **Purpose:** A Channel Admin removes a member from the channel (F33). Removing the sole admin triggers succession per F36. After commit, publishes `channel.member_removed` to the **removed user's** `user:{user_id}` topic (F75, ADR-0012).
 - **Auth / scope:** Bearer; caller must be an `admin` of this channel.
 - **Idempotent:** Yes (target not a member → `204`).
 - **Request:** _(none; `DELETE`)_
@@ -584,6 +615,22 @@ All request/response bodies use **snake_case** JSON (matches Python/Pydantic). A
   | 403 | Caller not a current member/participant of the parent conversation (F59) | problem+json |
   | 404 | No such media, or unassociated/orphaned (uniform) | problem+json |
 
+### `GET /v1/admin/users`
+- **Purpose:** Cursor-paginated, searchable list of workspace users — active **and** deactivated — backing the User Management screen (F72, PRD §11). `q` matches name/username/email, case-insensitive. Added post-M8 to document shipped T44 behavior.
+- **Auth / scope:** Bearer; **`system_admin`** only.
+- **Idempotent:** Yes (safe read).
+- **Request:** _(query: `?q=&status=&limit=50&cursor=<opaque|null>`)_
+```json
+{}
+```
+- **Responses:**
+  | Status | Meaning | Body |
+  |--------|---------|------|
+  | 200 | User page (empty list is a non-error result) | `{ items: [ { id, first_name, last_name, username, email, role, is_active, last_seen } ], next_cursor }` — **no password material, ever** (§8) |
+  | 400 | Invalid `status`/`limit`/`cursor` | problem+json |
+  | 401 | Auth | problem+json |
+  | 403 | Caller is not a System Admin | problem+json |
+
 ### `POST /v1/admin/users/{user_id}/deactivate`
 - **Purpose:** System Admin deactivates a user: blocks login, invalidates all of that user's sessions immediately, drops their WebSockets at next revalidation, runs channel succession where they were sole admin (F25, F36). Cannot deactivate the last active System Admin (F27).
 - **Auth / scope:** Bearer; **`system_admin`** only.
@@ -619,11 +666,12 @@ All request/response bodies use **snake_case** JSON (matches Python/Pydantic). A
 
 ### WebSocket `/v1/ws`
 
-Real-time only (F51–F56). New-message / edit / delete events, typing, and presence are delivered here; **all mutations happen over REST** (the WS surface is receive-oriented plus lightweight `typing`/`join`/`heartbeat` client frames). Delivery is **at-least-once**; clients **dedup by message id** (F54) and recover missed events via history-since-last-id on reconnect (F55, Flow K).
+Real-time only (F51–F56, F74–F75). New-message / edit / delete events, typing, presence, and membership lifecycle events are delivered here; **all mutations happen over REST** (the WS surface is receive-oriented plus lightweight `typing`/`join`/`heartbeat` client frames). Delivery is **at-least-once**; clients **dedup by message id** (F54) and recover missed events via history-since-last-id on reconnect (F55, Flow K). Membership events have **no replay** — a reconnecting client refetches `GET /v1/channels` instead (Flow L, ADR-0012).
 
 **Connection & auth (auth-BEFORE-join, F52, ADR-0006):**
 - Client connects to `wss://<host>/v1/ws` presenting the access token — as `?access_token=<jwt>` query param or a `Sec-WebSocket-Protocol` bearer sub-protocol. The server authenticates **before** the client may join any conversation. Missing/invalid/expired token → the socket is closed immediately with close code `4401` before any join.
 - After auth, the client sends `join` frames for the channels/DMs it is authorized for; the server verifies channel membership / DM participation per frame (F34) and subscribes the connection to the corresponding Redis topic (`chan:{channel_id}` or `dm:{a}:{b}`, ADR-0004). An unauthorized join is refused with an `error` frame (the socket stays open for other joins).
+- In addition to join-frame subscriptions, every authenticated connection is **auto-subscribed server-side** to its own per-user topic `user:{user_id}` immediately after auth (ADR-0012). No client frame is involved, and no connection can subscribe to another user's topic — identity is the authorization. Membership lifecycle events (`channel.member_added` / `channel.member_removed`, F74/F75) are delivered on this topic only.
 - Presence ref-count increments on connect and decrements on close; a user is `online` while ≥1 connection exists across tabs/instances (F49). On the last disconnect, `last_seen` is persisted durably (F50).
 - **Heartbeat & periodic revalidation:** the client sends `ping` frames on an interval; the server sends `pong` and, on each heartbeat, **re-runs the session-revocation check** (`sid` active + user `is_active`). A revoked/expired/deactivated session is dropped mid-connection at the next heartbeat with the appropriate close code below (F52). An ungraceful disconnect (missed heartbeats) expires via TTL and flips presence to `offline`.
 
@@ -670,9 +718,11 @@ Real-time only (F51–F56). New-message / edit / delete events, typing, and pres
 - `message.deleted` — `data` = `{ "id", "conversation", "deleted_at" }`; content omitted; clients hide by id (F43).
 - `typing` — `data` = `{ "user_id", "conversation" }`; the client auto-expires the indicator **5 s** after the last received typing frame (F56); no explicit stop frame is required.
 - `presence` — `data` = `{ "user_id", "state": "online" | "offline", "last_seen": "<iso8601|null>" }` (F49, F50).
+- `channel.member_added` — `conversation` = the channel; `data` = `{ "channel": { "id", "name", "is_private", "created_by", "created_at", "member_count" }, "user_id", "role", "joined_at" }`. Delivered **only** to the added user's connections via their `user:{user_id}` topic (F74, ADR-0012); carries the full channel summary so clients can insert the channel into their list — idempotently by channel id — without a follow-up fetch.
+- `channel.member_removed` — `conversation` = the channel; `data` = `{ "channel_id", "user_id" }` (no channel metadata — the user just lost the right to it). Delivered **only** to the removed user's connections; clients drop the channel from their list by id and exit any open view of it gracefully (F75).
 - `error` — `data` = `{ "code", "detail" }` for a non-fatal per-frame failure (e.g. unauthorized join) that does not close the socket.
 
-Events fan out across instances via Redis pub/sub (F53). Ordering across the fan-out is best-effort; clients order by the time-sortable message id (ADR-0005), not by arrival order.
+Events fan out across instances via Redis pub/sub (F53). Ordering across the fan-out is best-effort; clients order by the time-sortable message id (ADR-0005), not by arrival order. **Membership events are at-least-once with no replay:** a client that was disconnected when a membership change occurred MUST refetch `GET /v1/channels` on reconnect (Flow L) rather than expect missed `channel.member_*` events.
 
 ## Backward-compatibility checklist
 - [ ] No field removed/renamed without a version bump.
@@ -686,3 +736,4 @@ Events fan out across instances via Redis pub/sub (F53). Ordering across the fan
 2. **Refresh-token transport.** This contract returns `refresh_token` in the login/refresh JSON body. A hardened alternative is an httpOnly, Secure, SameSite cookie to keep it out of JS reach. This is a security-owner decision (pair with `security-reviewer`); flagged because switching later is a client-visible change.
 3. **`502` for email-delivery failure on invite issuance.** F1/ADR-0010 require failing loudly to the admin when SMTP is unreachable. `502 Bad Gateway` is used here to distinguish an upstream email-provider failure from a client error; confirm the status choice with the API owner (an alternative is `503`).
 4. **Message-history `limit` maximum (100).** ADR-0003 defers the exact max page size to this contract; 100 is proposed. Confirm against load-test findings (`performance-engineer`) before GA.
+5. **Role-change propagation.** `PATCH /v1/channels/{channel_id}/members/{user_id}` emits no WS event, so `my_role` shown by an open client may be stale until its next channel-list fetch. This is a deliberate v1 scope cut (R57 note, F75): role staleness is cosmetic and self-heals. Revisit (a third membership event) only if it proves confusing in practice.
