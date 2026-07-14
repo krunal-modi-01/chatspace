@@ -24,7 +24,7 @@ import pytest
 from starlette.websockets import WebSocketState
 
 from app.core.ids import generate_id
-from app.core.redis_keys import channel_topic, dm_topic, presence_topic
+from app.core.redis_keys import channel_topic, dm_topic, presence_topic, user_topic
 from app.services.message_events import build_created_event
 from app.ws.connection_manager import ConnectionManager
 from app.ws.fanout import PubSubRelay, _typing_typer_id
@@ -334,6 +334,82 @@ class TestPubSubRelayCrossInstance:
             assert ws.received[0]["type"] == "presence"
             assert ws.received[0]["data"]["user_id"] == str(user_id)
             assert ws.received[0]["data"]["state"] == "online"
+        finally:
+            await relay.stop()
+
+    async def test_member_added_event_published_on_user_topic_reaches_a_subscriber_relay(
+        self, redis_client: Any
+    ) -> None:
+        """T49/ADR-0012: `PubSubRelay` must actually subscribe to `user:*` —
+        otherwise every `channel.member_added`/`channel.member_removed`
+        event is silently dropped by Redis (no matching subscriber) and
+        never reaches any connected client, mirroring the T25 presence
+        regression this test file already guards against.
+        """
+
+        manager = ConnectionManager()
+        ws = _FakeWebSocket()
+        state = _register(manager, ws)
+        user_id = uuid4()
+        topic = user_topic(user_id)
+        manager.subscribe(state, topic)
+
+        relay = PubSubRelay(redis_client, manager=manager)
+        await relay.start()
+        try:
+            event = {
+                "type": "channel.member_added",
+                "conversation": {"kind": "channel", "channel_id": str(uuid4())},
+                "data": {
+                    "channel": {
+                        "id": str(uuid4()),
+                        "name": "engineering",
+                        "is_private": False,
+                        "created_by": str(uuid4()),
+                        "created_at": "2026-07-02T14:31:07.482000+00:00",
+                        "member_count": 2,
+                    },
+                    "user_id": str(user_id),
+                    "role": "member",
+                    "joined_at": "2026-07-03T09:00:00+00:00",
+                },
+            }
+            await redis_client.publish(topic, json.dumps(event))
+
+            await _wait_until(lambda: len(ws.received) == 1)
+            assert ws.received[0]["type"] == "channel.member_added"
+            assert ws.received[0]["data"]["user_id"] == str(user_id)
+        finally:
+            await relay.stop()
+
+    async def test_only_the_subscribed_users_own_connection_receives_the_event(
+        self, redis_client: Any
+    ) -> None:
+        """Privacy: an event published on one user's `user:{id}` topic must
+        never reach a connection subscribed to a *different* user's topic
+        — delivery is per-user, never per-channel (F74/F75 isolation).
+        """
+
+        manager = ConnectionManager()
+        ws_target = _FakeWebSocket()
+        ws_other = _FakeWebSocket()
+        target_user_id = uuid4()
+        other_user_id = uuid4()
+        manager.subscribe(_register(manager, ws_target), user_topic(target_user_id))
+        manager.subscribe(_register(manager, ws_other), user_topic(other_user_id))
+
+        relay = PubSubRelay(redis_client, manager=manager)
+        await relay.start()
+        try:
+            event = {
+                "type": "channel.member_removed",
+                "conversation": {"kind": "channel", "channel_id": str(uuid4())},
+                "data": {"channel_id": str(uuid4()), "user_id": str(target_user_id)},
+            }
+            await redis_client.publish(user_topic(target_user_id), json.dumps(event))
+
+            await _wait_until(lambda: len(ws_target.received) == 1)
+            assert ws_other.received == []
         finally:
             await relay.stop()
 

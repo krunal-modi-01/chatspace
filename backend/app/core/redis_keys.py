@@ -6,7 +6,10 @@ NOTES). Every key a consumer touches must go through one of these
 builders so the roles never collide in the shared keyspace and so the
 canonical shapes below are produced from exactly one place:
 
-1. **Pub/sub fan-out** (ADR-0004) — `chan:{channel_id}` / `dm:{a}:{b}`.
+1. **Pub/sub fan-out** (ADR-0004) — `chan:{channel_id}` / `dm:{a}:{b}`,
+   plus the per-user topic `user:{user_id}` (ADR-0012, T49) every
+   authenticated WS connection auto-subscribes to for its own membership
+   lifecycle events.
 2. **Presence** (F49-F50) — per-user ref-count + last-seen-adjacent state.
 3. **Rate-limit token buckets** (F62-F64) — per-subject, per-scope buckets.
 4. **Session-revocation cache** (ADR-0006) — per-`sid` revocation state.
@@ -50,6 +53,22 @@ def dm_topic(user_a_id: UUID | str, user_b_id: UUID | str) -> str:
     first, second = str(user_a_id), str(user_b_id)
     least, greatest = (first, second) if first <= second else (second, first)
     return f"dm:{least}:{greatest}"
+
+
+def user_topic(user_id: UUID | str) -> str:
+    """Return the per-user pub/sub topic every authenticated WS connection
+    auto-subscribes to at connect time (ADR-0012, T49).
+
+    Canonical shape: `user:{user_id}` (spec line 674). Unlike
+    `channel_topic`/`dm_topic`, no client `join` frame ever targets this
+    topic — the server subscribes each connection to its own caller's
+    topic immediately after auth, and no connection can subscribe to
+    another user's topic since identity (not a client-supplied id) is the
+    authorization. `channel.member_added`/`channel.member_removed`
+    (F74/F75) are delivered here, and only here.
+    """
+
+    return f"user:{user_id}"
 
 
 # --- 2. Presence (F49-F50) --------------------------------------------------

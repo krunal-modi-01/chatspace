@@ -12,13 +12,16 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.ids import generate_id
 from app.core.jwt import create_access_token
+from app.core.redis_keys import user_topic
 from app.core.security import hash_password
 from app.models.channel import Channel
 from app.models.channel_member import ChannelMember, ChannelMemberRole
@@ -1066,3 +1069,345 @@ class TestSoleAdminSuccessionConcurrency:
         # guarantees this happens deterministically rather than racily).
         assert remaining_early is not None
         assert remaining_early.role == ChannelMemberRole.ADMIN
+
+
+def _mock_redis(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Patch `app.api.channels.get_redis_client` to return a fresh `AsyncMock`.
+
+    Isolates the T49 publish-wiring assertions below from needing a real
+    Redis: `app.services.channel_events.publish_channel_event` just calls
+    `redis.publish(topic, payload)`, so a mock is enough to prove *which*
+    topic/payload each route publishes, without needing the real
+    cross-instance relay (covered separately by `tests/test_ws_fanout.py`).
+    """
+
+    redis = AsyncMock()
+    monkeypatch.setattr("app.api.channels.get_redis_client", lambda: redis)
+    return redis
+
+
+class TestJoinChannelPublishesMemberAdded:
+    """T49/ADR-0012: `POST /{id}/join` publishes `channel.member_added` to
+    the caller's own `user:{user_id}` topic, after commit, only on an
+    actual (non-idempotent-replay) join.
+    """
+
+    async def test_actual_join_publishes_to_the_callers_own_topic(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        redis = _mock_redis(monkeypatch)
+        creator, _ = await _authed_user(db_session)
+        joiner, joiner_token = await _authed_user(db_session)
+        channel = await _make_channel(db_session, creator=creator)
+        await db_session.commit()
+
+        response = client.post(
+            f"/v1/channels/{channel.id}/join", headers=_auth_header(joiner_token)
+        )
+
+        assert response.status_code == 200
+        redis.publish.assert_awaited_once()
+        topic, payload = redis.publish.await_args.args
+        assert topic == user_topic(joiner.id)
+
+        import json
+
+        event = json.loads(payload)
+        assert event["type"] == "channel.member_added"
+        assert event["conversation"] == {"kind": "channel", "channel_id": str(channel.id)}
+        assert event["data"]["user_id"] == str(joiner.id)
+        assert event["data"]["role"] == "member"
+        assert event["data"]["channel"] == {
+            "id": str(channel.id),
+            "name": channel.name,
+            "is_private": False,
+            "created_by": str(creator.id),
+            "created_at": channel.created_at.isoformat(),
+            "member_count": 2,
+        }
+
+    async def test_idempotent_replay_join_does_not_publish(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        redis = _mock_redis(monkeypatch)
+        creator, _ = await _authed_user(db_session)
+        joiner, joiner_token = await _authed_user(db_session)
+        channel = await _make_channel(
+            db_session, creator=creator, members=[(joiner, ChannelMemberRole.MEMBER)]
+        )
+        await db_session.commit()
+
+        response = client.post(
+            f"/v1/channels/{channel.id}/join", headers=_auth_header(joiner_token)
+        )
+
+        assert response.status_code == 200
+        redis.publish.assert_not_awaited()
+
+    async def test_redis_outage_does_not_fail_the_join(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ADR-0004 fail-open: Redis down at publish time must not turn a
+        successful mutation into an error response — the row is already
+        committed; only the live event is lost.
+        """
+
+        redis = _mock_redis(monkeypatch)
+        redis.publish.side_effect = RedisError("simulated outage")
+        creator, _ = await _authed_user(db_session)
+        joiner, joiner_token = await _authed_user(db_session)
+        channel = await _make_channel(db_session, creator=creator)
+        await db_session.commit()
+
+        response = client.post(
+            f"/v1/channels/{channel.id}/join", headers=_auth_header(joiner_token)
+        )
+
+        assert response.status_code == 200
+        membership = await _get_membership_row(db_session, channel_id=channel.id, user_id=joiner.id)
+        assert membership is not None
+
+
+class TestLeaveChannelPublishesMemberRemoved:
+    """T49/ADR-0012: `POST /{id}/leave` publishes `channel.member_removed`
+    to the caller's own `user:{user_id}` topic, after commit, only on an
+    actual leave.
+    """
+
+    async def test_actual_leave_publishes_to_the_callers_own_topic(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        redis = _mock_redis(monkeypatch)
+        creator, _ = await _authed_user(db_session)
+        member, member_token = await _authed_user(db_session)
+        channel = await _make_channel(
+            db_session, creator=creator, members=[(member, ChannelMemberRole.MEMBER)]
+        )
+        await db_session.commit()
+
+        response = client.post(
+            f"/v1/channels/{channel.id}/leave", headers=_auth_header(member_token)
+        )
+
+        assert response.status_code == 204
+        redis.publish.assert_awaited_once()
+        topic, payload = redis.publish.await_args.args
+        assert topic == user_topic(member.id)
+
+        import json
+
+        event = json.loads(payload)
+        assert event["type"] == "channel.member_removed"
+        assert event["conversation"] == {"kind": "channel", "channel_id": str(channel.id)}
+        assert event["data"] == {"channel_id": str(channel.id), "user_id": str(member.id)}
+
+    async def test_non_member_idempotent_leave_does_not_publish(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        redis = _mock_redis(monkeypatch)
+        creator, _ = await _authed_user(db_session)
+        outsider, outsider_token = await _authed_user(db_session)
+        channel = await _make_channel(db_session, creator=creator)
+        await db_session.commit()
+
+        response = client.post(
+            f"/v1/channels/{channel.id}/leave", headers=_auth_header(outsider_token)
+        )
+
+        assert response.status_code == 204
+        redis.publish.assert_not_awaited()
+
+    async def test_redis_outage_does_not_fail_the_leave(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        redis = _mock_redis(monkeypatch)
+        redis.publish.side_effect = RedisError("simulated outage")
+        creator, _ = await _authed_user(db_session)
+        member, member_token = await _authed_user(db_session)
+        channel = await _make_channel(
+            db_session, creator=creator, members=[(member, ChannelMemberRole.MEMBER)]
+        )
+        await db_session.commit()
+
+        response = client.post(
+            f"/v1/channels/{channel.id}/leave", headers=_auth_header(member_token)
+        )
+
+        assert response.status_code == 204
+        remaining = await _get_membership_row(db_session, channel_id=channel.id, user_id=member.id)
+        assert remaining is None
+
+
+class TestAddMemberPublishesMemberAddedToTheAddedUser:
+    """T49/ADR-0012: `POST /{id}/members` publishes `channel.member_added`
+    to the *added* user's own topic — never the calling admin's.
+    """
+
+    async def test_publishes_to_the_added_users_topic_not_the_admins(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        redis = _mock_redis(monkeypatch)
+        admin, admin_token = await _authed_user(db_session)
+        target, _ = await _authed_user(db_session)
+        channel = await _make_channel(db_session, creator=admin)
+        await db_session.commit()
+
+        response = client.post(
+            f"/v1/channels/{channel.id}/members",
+            headers=_auth_header(admin_token),
+            json={"user_id": str(target.id), "role": "member"},
+        )
+
+        assert response.status_code == 200
+        redis.publish.assert_awaited_once()
+        topic, payload = redis.publish.await_args.args
+        assert topic == user_topic(target.id)
+        assert topic != user_topic(admin.id)
+
+        import json
+
+        event = json.loads(payload)
+        assert event["type"] == "channel.member_added"
+        assert event["data"]["user_id"] == str(target.id)
+
+    async def test_already_member_does_not_publish(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        redis = _mock_redis(monkeypatch)
+        admin, admin_token = await _authed_user(db_session)
+        target, _ = await _authed_user(db_session)
+        channel = await _make_channel(
+            db_session, creator=admin, members=[(target, ChannelMemberRole.MEMBER)]
+        )
+        await db_session.commit()
+
+        response = client.post(
+            f"/v1/channels/{channel.id}/members",
+            headers=_auth_header(admin_token),
+            json={"user_id": str(target.id), "role": "member"},
+        )
+
+        assert response.status_code == 200
+        redis.publish.assert_not_awaited()
+
+
+class TestRemoveMemberPublishesMemberRemovedToTheRemovedUser:
+    """T49/ADR-0012: `DELETE /{id}/members/{user_id}` publishes
+    `channel.member_removed` to the *removed* user's own topic — never
+    the calling admin's.
+    """
+
+    async def test_publishes_to_the_removed_users_topic_not_the_admins(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        redis = _mock_redis(monkeypatch)
+        admin, admin_token = await _authed_user(db_session)
+        target, _ = await _authed_user(db_session)
+        channel = await _make_channel(
+            db_session, creator=admin, members=[(target, ChannelMemberRole.MEMBER)]
+        )
+        await db_session.commit()
+
+        response = client.delete(
+            f"/v1/channels/{channel.id}/members/{target.id}",
+            headers=_auth_header(admin_token),
+        )
+
+        assert response.status_code == 204
+        redis.publish.assert_awaited_once()
+        topic, payload = redis.publish.await_args.args
+        assert topic == user_topic(target.id)
+        assert topic != user_topic(admin.id)
+
+        import json
+
+        event = json.loads(payload)
+        assert event["type"] == "channel.member_removed"
+        assert event["data"] == {"channel_id": str(channel.id), "user_id": str(target.id)}
+
+    async def test_not_a_member_idempotent_remove_does_not_publish(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        redis = _mock_redis(monkeypatch)
+        admin, admin_token = await _authed_user(db_session)
+        target, _ = await _authed_user(db_session)
+        channel = await _make_channel(db_session, creator=admin)
+        await db_session.commit()
+
+        response = client.delete(
+            f"/v1/channels/{channel.id}/members/{target.id}",
+            headers=_auth_header(admin_token),
+        )
+
+        assert response.status_code == 204
+        redis.publish.assert_not_awaited()
+
+
+class TestPatchRoleChangeEmitsNoWSEvent:
+    """Frozen contract (Open Question 5): a role change deliberately emits
+    no WS event — out of T49's scope.
+    """
+
+    async def test_role_change_does_not_publish_anything(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        redis = _mock_redis(monkeypatch)
+        admin, admin_token = await _authed_user(db_session)
+        target, _ = await _authed_user(db_session)
+        channel = await _make_channel(
+            db_session, creator=admin, members=[(target, ChannelMemberRole.MEMBER)]
+        )
+        await db_session.commit()
+
+        response = client.patch(
+            f"/v1/channels/{channel.id}/members/{target.id}",
+            headers=_auth_header(admin_token),
+            json={"role": "admin"},
+        )
+
+        assert response.status_code == 200
+        redis.publish.assert_not_awaited()

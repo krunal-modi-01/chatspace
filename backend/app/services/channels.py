@@ -98,7 +98,18 @@ def is_valid_channel_name(name: str) -> bool:
     return bool(CHANNEL_NAME_RE.match(name))
 
 
-async def _count_members(db: AsyncSession, channel_id: UUID) -> int:
+async def count_channel_members(db: AsyncSession, channel_id: UUID) -> int:
+    """Return the current member count of `channel_id` (a plain `COUNT(*)`).
+
+    Public (not `_`-prefixed) because `join_public_channel`/
+    `add_channel_member` (T49/ADR-0012) call this *pre-commit*, right
+    after the new membership row is flushed, to capture the count needed
+    for the `channel.member_added` event's `data.channel.member_count`
+    without a post-commit re-query (see those functions' docstrings) — the
+    same query `get_channel_view`/`list_channel_members` already run for
+    their own read paths.
+    """
+
     result = await db.execute(
         select(func.count())
         .select_from(ChannelMember)
@@ -184,7 +195,7 @@ async def get_channel_view(
     if channel.is_private and membership is None:
         return None
 
-    member_count = await _count_members(db, channel_id)
+    member_count = await count_channel_members(db, channel_id)
     my_role = membership.role if membership is not None else None
     return ChannelView(channel=channel, member_count=member_count, my_role=my_role)
 
@@ -424,6 +435,8 @@ class JoinOutcome(Enum):
 class JoinResult:
     outcome: JoinOutcome
     membership: ChannelMember | None
+    channel: Channel | None = None
+    member_count: int | None = None
 
 
 async def join_public_channel(db: AsyncSession, *, channel_id: UUID, user_id: UUID) -> JoinResult:
@@ -439,6 +452,16 @@ async def join_public_channel(db: AsyncSession, *, channel_id: UUID, user_id: UU
     not allowed). A concurrent duplicate-join race is caught via
     `IntegrityError` on the composite PK and resolved by re-reading the
     now-existing row, so this never raises on a legitimate double-submit.
+
+    On the actual `JOINED` outcome, `channel` and `member_count` are
+    populated here — *before* the caller commits — so the T49 post-commit
+    publish path (`app.api.channels.join_channel_route`) never needs to
+    re-query the database after `db.commit()` has returned. That keeps a
+    Redis outage the *only* way to lose the `channel.member_added` event;
+    a transient DB error can no longer turn an already-durable join into a
+    dropped event by failing on a post-commit re-fetch (`count_channel_members`
+    is safe to call pre-commit, in the same transaction, since the flush
+    below already made the new membership row visible to it).
     """
 
     channel = await db.get(Channel, channel_id)
@@ -447,10 +470,10 @@ async def join_public_channel(db: AsyncSession, *, channel_id: UUID, user_id: UU
 
     existing = await get_membership(db, channel_id=channel_id, user_id=user_id)
     if existing is not None:
-        return JoinResult(JoinOutcome.ALREADY_MEMBER, existing)
+        return JoinResult(JoinOutcome.ALREADY_MEMBER, existing, channel=channel)
 
     if channel.is_private:
-        return JoinResult(JoinOutcome.PRIVATE, None)
+        return JoinResult(JoinOutcome.PRIVATE, None, channel=channel)
 
     membership = ChannelMember(
         channel_id=channel_id, user_id=user_id, role=ChannelMemberRole.MEMBER
@@ -462,9 +485,10 @@ async def join_public_channel(db: AsyncSession, *, channel_id: UUID, user_id: UU
         await db.rollback()
         existing = await get_membership(db, channel_id=channel_id, user_id=user_id)
         if existing is not None:
-            return JoinResult(JoinOutcome.ALREADY_MEMBER, existing)
+            return JoinResult(JoinOutcome.ALREADY_MEMBER, existing, channel=channel)
         raise
-    return JoinResult(JoinOutcome.JOINED, membership)
+    member_count = await count_channel_members(db, channel_id)
+    return JoinResult(JoinOutcome.JOINED, membership, channel=channel, member_count=member_count)
 
 
 class LeaveOutcome(Enum):
@@ -534,7 +558,7 @@ async def list_channel_members(
     caller-is-a-member checks — this function assumes both already hold.
     """
 
-    total = await _count_members(db, channel_id)
+    total = await count_channel_members(db, channel_id)
 
     rows_result = await db.execute(
         select(User, ChannelMember)
@@ -563,6 +587,8 @@ class AddMemberOutcome(Enum):
 class AddMemberResult:
     outcome: AddMemberOutcome
     membership: ChannelMember | None
+    channel: Channel | None = None
+    member_count: int | None = None
 
 
 async def add_channel_member(
@@ -589,6 +615,13 @@ async def add_channel_member(
     `TARGET_USER_NOT_FOUND`; already a member -> `ALREADY_MEMBER` (no
     duplicate row, idempotent); otherwise inserts the new membership at
     `role`.
+
+    On the actual `ADDED` outcome, `channel` and `member_count` are
+    populated here — *before* the caller commits — for the same reason as
+    `join_public_channel`: the T49 post-commit publish path
+    (`app.api.channels.add_channel_member_route`) must not re-query the
+    database after `db.commit()` has returned, so that a Redis outage
+    remains the only way to lose the `channel.member_added` event.
     """
 
     channel = await db.get(Channel, channel_id)
@@ -607,7 +640,7 @@ async def add_channel_member(
 
     existing = await get_membership(db, channel_id=channel_id, user_id=target_user_id)
     if existing is not None:
-        return AddMemberResult(AddMemberOutcome.ALREADY_MEMBER, existing)
+        return AddMemberResult(AddMemberOutcome.ALREADY_MEMBER, existing, channel=channel)
 
     membership = ChannelMember(channel_id=channel_id, user_id=target_user_id, role=role)
     db.add(membership)
@@ -617,9 +650,12 @@ async def add_channel_member(
         await db.rollback()
         existing = await get_membership(db, channel_id=channel_id, user_id=target_user_id)
         if existing is not None:
-            return AddMemberResult(AddMemberOutcome.ALREADY_MEMBER, existing)
+            return AddMemberResult(AddMemberOutcome.ALREADY_MEMBER, existing, channel=channel)
         raise
-    return AddMemberResult(AddMemberOutcome.ADDED, membership)
+    member_count = await count_channel_members(db, channel_id)
+    return AddMemberResult(
+        AddMemberOutcome.ADDED, membership, channel=channel, member_count=member_count
+    )
 
 
 class ChangeRoleOutcome(Enum):

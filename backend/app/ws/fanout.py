@@ -9,12 +9,12 @@ sent on one instance reaches a client connected to a different instance
 — "cross-instance delivery with no session affinity" (F53).
 
 `PubSubRelay` is that subscriber: one Redis pattern-subscription
-(`chan:*` + `dm:*` + `presence:*`) per process, rather than one Redis
-subscription per joined topic — simpler to run and to reason about at
-chatspace's scale (CLAUDE.md: "a couple of app instances", no cluster),
-and it means a connection joining/leaving a topic is pure in-process
-bookkeeping (`ConnectionManager.subscribe`/`unsubscribe`) with no
-matching Redis `SUBSCRIBE`/`UNSUBSCRIBE` round-trip needed.
+(`chan:*` + `dm:*` + `presence:*` + `user:*`) per process, rather than
+one Redis subscription per joined topic — simpler to run and to reason
+about at chatspace's scale (CLAUDE.md: "a couple of app instances", no
+cluster), and it means a connection joining/leaving a topic is pure
+in-process bookkeeping (`ConnectionManager.subscribe`/`unsubscribe`)
+with no matching Redis `SUBSCRIBE`/`UNSUBSCRIBE` round-trip needed.
 
 `presence:*` (T25, `app.core.redis_keys.presence_topic`) rides this same
 relay so a `presence` online/offline event fans out cross-instance
@@ -23,6 +23,14 @@ exactly like `message.*` (F53) — it does not overlap with the *other*
 `presence:state:*`, `presence:typing:*`): those are plain GET/SET/EXPIRE
 keys, never `PUBLISH`ed to, so they never arrive here regardless of this
 pattern subscription.
+
+`user:*` (T49, `app.core.redis_keys.user_topic`, ADR-0012) mirrors
+`presence:*` the same way: every app instance's relay pattern-subscribes
+to every per-user topic at once, and `ConnectionManager.broadcast_to_topic`
+delivers a `channel.member_added`/`channel.member_removed` event only to
+the local connections actually subscribed to that one user's topic —
+which, per `app.ws.router`'s server-side auto-subscribe, is only ever
+that user's own connections.
 
 Delivery here is the live half of the contract's at-least-once model —
 a relay that is down, restarting, or briefly disconnected from Redis
@@ -88,14 +96,16 @@ def _typing_typer_id(payload: dict[str, Any]) -> UUID | None:
         return None
 
 
-# One pattern subscription covers every channel/DM/presence topic
-# (`app.core.redis_keys.channel_topic`/`dm_topic`/`presence_topic`)
-# without the relay needing to track which literal topics currently have
-# a joined local connection — `ConnectionManager.broadcast_to_topic`
-# already filters to only the topics with a live subscriber.
+# One pattern subscription covers every channel/DM/presence/per-user topic
+# (`app.core.redis_keys.channel_topic`/`dm_topic`/`presence_topic`/
+# `user_topic`) without the relay needing to track which literal topics
+# currently have a joined local connection —
+# `ConnectionManager.broadcast_to_topic` already filters to only the
+# topics with a live subscriber.
 _CHANNEL_PATTERN = "chan:*"
 _DM_PATTERN = "dm:*"
 _PRESENCE_PATTERN = "presence:*"
+_USER_PATTERN = "user:*"
 
 # How long a single `get_message` poll blocks waiting for the next
 # fan-out event before returning `None` and looping again. Bounds how
@@ -181,7 +191,9 @@ class PubSubRelay:
 
         try:
             self._pubsub = self._redis.pubsub()
-            await self._pubsub.psubscribe(_CHANNEL_PATTERN, _DM_PATTERN, _PRESENCE_PATTERN)
+            await self._pubsub.psubscribe(
+                _CHANNEL_PATTERN, _DM_PATTERN, _PRESENCE_PATTERN, _USER_PATTERN
+            )
             return True
         except asyncio.CancelledError:
             raise
