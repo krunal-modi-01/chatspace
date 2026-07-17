@@ -25,6 +25,8 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import unquote
 
 import pytest
+from app.core.metrics import reset_metrics
+from app.core.metrics import snapshot as metrics_snapshot
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -215,6 +217,7 @@ class TestUploadMedia:
         captured = _fake_put_object(monkeypatch)
         source = _jpeg_bytes_with_exif()
 
+        reset_metrics()
         response = client.post(
             "/v1/media",
             headers=_auth_header(token),
@@ -235,6 +238,11 @@ class TestUploadMedia:
         assert isinstance(stored, bytes)
         result_image = Image.open(io.BytesIO(stored))
         assert not result_image.getexif()
+
+        # Key metric (technical spec §9): "media upload success/reject
+        # counts" (T39; code review finding 1).
+        counters = metrics_snapshot()["counters"]["media_upload_success_total"]
+        assert counters["kind=image"] == 1
 
     async def test_missing_multipart_part_is_400(
         self, migrated_db: None, client: TestClient, db_session: AsyncSession
@@ -266,6 +274,7 @@ class TestUploadMedia:
         _, token = await _authed_user(db_session)
         oversize = b"\x89PNG\r\n\x1a\n" + b"0" * (SIZE_CAP_BYTES_BY_KIND[AttachmentKind.IMAGE] + 1)
 
+        reset_metrics()
         response = client.post(
             "/v1/media",
             headers=_auth_header(token),
@@ -275,6 +284,14 @@ class TestUploadMedia:
 
         assert response.status_code == 413
         assert response.headers["content-type"] == "application/problem+json"
+
+        # Key metric (technical spec §9): "media upload success/reject
+        # counts" (T39; code review finding 1). This is the per-kind
+        # `MediaSizeExceededError` reject path, well under the global
+        # `MaxBodySizeMiddleware` ceiling, so it reaches the route's own
+        # counter rather than the global body-size guard's 413.
+        counters = metrics_snapshot()["counters"]["media_upload_rejected_total"]
+        assert counters["reason=size_exceeded"] == 1
 
     async def test_svg_excluded_from_image_allowlist_is_415(
         self, migrated_db: None, client: TestClient, db_session: AsyncSession
@@ -595,8 +612,6 @@ class TestGetMediaUrl:
         await leave_channel(db_session, channel_id=channel.id, user_id=member.id)
         await db_session.commit()
 
-        response = client.get(
-            f"/v1/media/{attachment.id}/url", headers=_auth_header(member_token)
-        )
+        response = client.get(f"/v1/media/{attachment.id}/url", headers=_auth_header(member_token))
 
         assert response.status_code == 403

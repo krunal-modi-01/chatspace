@@ -21,6 +21,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.core.metrics import reset_metrics
+from app.core.metrics import snapshot as metrics_snapshot
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketDisconnect
@@ -873,6 +875,7 @@ class TestHeartbeatTimeoutAndRateLimit:
         monkeypatch.setenv("WS_FRAME_RATE_LIMIT_MAX_FRAMES", "3")
         monkeypatch.setenv("WS_FRAME_RATE_LIMIT_WINDOW_SECONDS", "10")
         get_settings.cache_clear()
+        reset_metrics()
         try:
             _, _, token = await _authed_user(db_session)
 
@@ -887,8 +890,15 @@ class TestHeartbeatTimeoutAndRateLimit:
                 with pytest.raises(WebSocketDisconnect) as exc_info:
                     ws.receive_json()
                 assert exc_info.value.code == WSCloseCode.RATE_LIMITED
+
+            # Key metric (technical spec §9): "429 counts by endpoint class"
+            # — the WS frame-rate guard shares `rate_limit_rejected_total`
+            # under its own `endpoint_class=ws_frame` label (T39).
+            counters = metrics_snapshot()["counters"]["rate_limit_rejected_total"]
+            assert counters["endpoint_class=ws_frame"] == 1
         finally:
             get_settings.cache_clear()
+            reset_metrics()
 
 
 async def _wait_until_last_seen_persisted(

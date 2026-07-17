@@ -1,0 +1,243 @@
+name: CI
+
+# T38: build/verify-only CI. This workflow never deploys anywhere — no image
+# push, no `docker-compose up` against a real target, no platform CLI. Its
+# only job is to gate merges to `main` on the same command gates CLAUDE.md
+# defines (install/LINT/TYPE/TEST), plus the mandatory secret-scan and an
+# Alembic upgrade/downgrade round-trip on a scratch DB. Deployment is a
+# separate concern (see T40 / devops-engineer).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref/PR to save CI minutes; never cancels
+# across different PRs/branches.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege default: read-only checkout, nothing else. No job in this
+# workflow needs to write to the repo, packages, or deployments.
+permissions:
+  contents: read
+
+jobs:
+  # ── secret-scan ────────────────────────────────────────────────────────
+  # Mandatory gate: not skippable via label, commit trailer, or env var.
+  # Runs first and independently of the other jobs.
+  secret-scan:
+    name: secret-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history, so removed-but-once-committed secrets are still caught)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (checksum-verified)
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION="8.21.2"
+          curl -fsSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o /tmp/gitleaks_checksums.txt \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          # Verify only the one asset we downloaded against the release's
+          # published checksums file, so a tampered/corrupted release asset
+          # fails closed instead of being silently installed into a
+          # mandatory, non-disable-able security gate.
+          ( cd /tmp && grep "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks_checksums.txt | sha256sum -c - )
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+
+      - name: Run secret scan (blocking)
+        run: bash .github/scripts/secret-scan.sh
+
+  # ── backend: LINT + TYPE + TEST ──────────────────────────────────────────
+  backend-verify:
+    name: backend (lint, typecheck, test)
+    runs-on: ubuntu-latest
+    # Single source of truth for the scratch-DB superuser credentials, shared
+    # by the `services.postgres` block below and the migration round-trip
+    # step's own PG_* env — avoids the two ever drifting out of sync (see
+    # T38 code review finding #3).
+    #
+    # Also carries the fixed, non-secret, test-only Settings values — never
+    # used against a real service, never used outside CI. Mirrors
+    # backend/tests/conftest.py REQUIRED_ENV so `app.core.config.Settings`
+    # (which has no insecure defaults, by design) validates for the
+    # standalone Alembic round-trip step, which runs outside pytest and so
+    # doesn't get conftest's automatic env injection. Scoped to this job only
+    # (frontend-verify needs none of it) — see T38 code review nit #2.
+    env:
+      PG_HOST: localhost
+      PG_PORT: "5432"
+      PG_SUPERUSER: postgres
+      PG_SUPERUSER_PASSWORD: postgres
+      POSTGRES_TEST_DB: chatspace_test
+      # Only needs to be a syntactically valid Redis URL: env.py's
+      # get_settings() call only validates Settings, it never opens a Redis
+      # connection during the migration round-trip step. Pointed at db 15 so
+      # it can't collide with the `redis` service's db 0/1 used elsewhere in
+      # this same job (see T38 code review Blocker — REDIS_URL was
+      # previously omitted entirely, which made Settings() raise a
+      # ValidationError and fail every CI run on this step).
+      REDIS_URL: redis://localhost:6379/15
+      JWT_SIGNING_KEY: test-signing-key-not-a-real-secret
+      SMTP_HOST: localhost
+      SMTP_PORT: "1025"
+      SMTP_USERNAME: test
+      SMTP_PASSWORD: test-smtp-password-not-real
+      SMTP_FROM_ADDRESS: no-reply@chatspace.example
+      PASSWORD_RESET_URL_BASE: https://chatspace.example/reset-password
+      INVITE_URL_BASE: https://chatspace.example/accept-invite
+      S3_ENDPOINT_URL: http://localhost:9000
+      S3_BUCKET_NAME: chatspace-media-test
+      S3_ACCESS_KEY_ID: test-access-key-not-real
+      S3_SECRET_ACCESS_KEY: test-secret-key-not-real
+      BOOTSTRAP_ADMIN_EMAIL: admin@chatspace.example
+      BOOTSTRAP_ADMIN_USERNAME: admin
+      BOOTSTRAP_ADMIN_PASSWORD: test-bootstrap-password-1
+      BOOTSTRAP_ADMIN_FIRST_NAME: System
+      BOOTSTRAP_ADMIN_LAST_NAME: Admin
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ${{ env.PG_SUPERUSER }}
+          POSTGRES_PASSWORD: ${{ env.PG_SUPERUSER_PASSWORD }}
+          POSTGRES_DB: ${{ env.POSTGRES_TEST_DB }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U ${{ env.PG_SUPERUSER }} -d ${{ env.POSTGRES_TEST_DB }}"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.5.11"
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      - name: Set up Python
+        working-directory: backend
+        run: uv python install
+
+      # CLAUDE.md commands.install
+      - name: Install dependencies (uv sync)
+        working-directory: backend
+        run: uv sync --frozen
+
+      # CLAUDE.md commands.lint (backend half)
+      - name: Lint (ruff check)
+        working-directory: backend
+        run: uv run ruff check .
+
+      # CLAUDE.md commands.typecheck (backend half)
+      - name: Typecheck (mypy)
+        working-directory: backend
+        run: uv run mypy app
+
+      # Acceptance: Alembic 'upgrade head' -> 'downgrade base' round-trip on
+      # a scratch DB, distinct from the shared chatspace_test database pytest
+      # uses below. See .github/scripts/migration-roundtrip.sh.
+      # PG_HOST/PG_PORT/PG_SUPERUSER/PG_SUPERUSER_PASSWORD (and REDIS_URL plus
+      # the other Settings-required values) come from this job's `env:` block
+      # (same source as `services.postgres` above) — no step-level
+      # duplication to keep in sync.
+      - name: Alembic migration round-trip (scratch DB)
+        working-directory: backend
+        run: |
+          sudo apt-get update -y >/dev/null
+          sudo apt-get install -y --no-install-recommends postgresql-client >/dev/null
+          bash ../.github/scripts/migration-roundtrip.sh
+
+      # CLAUDE.md commands.test (backend half). conftest.py's
+      # pytest_sessionstart migrates this DB to head and populates the rest
+      # of the required env automatically once it detects Postgres is
+      # reachable on localhost:5432 (see backend/tests/conftest.py).
+      - name: Test (pytest)
+        working-directory: backend
+        run: uv run pytest
+
+  # ── frontend: LINT + TYPE + TEST ─────────────────────────────────────────
+  frontend-verify:
+    name: frontend (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      # CLAUDE.md commands.install (frontend half). `npm install`, not
+      # `npm ci`, deliberately — matches frontend/Dockerfile's documented
+      # reasoning: different npm releases resolve optional platform-specific
+      # transitive deps (wasm fallbacks for lightningcss/rollup) slightly
+      # differently, which makes `npm ci`'s strict lockfile-parity check
+      # spuriously fail across npm versions even with a valid, unchanged
+      # lockfile.
+      - name: Install dependencies (npm install)
+        working-directory: frontend
+        run: npm install --no-audit --no-fund
+
+      # CLAUDE.md commands.lint (frontend half)
+      - name: Lint (oxlint via npm run lint)
+        working-directory: frontend
+        run: npm run lint
+
+      # CLAUDE.md commands.typecheck (frontend half)
+      - name: Typecheck (tsc)
+        working-directory: frontend
+        run: npm run typecheck
+
+      # CLAUDE.md commands.test (frontend half)
+      - name: Test (vitest)
+        working-directory: frontend
+        run: npm run test
+
+      # CLAUDE.md commands.build — "code compiles" is part of Definition of
+      # Done; this is a build/verify step only, nothing is published/deployed.
+      - name: Build (vite build)
+        working-directory: frontend
+        run: npm run build
+
+  # ── single required status check ─────────────────────────────────────────
+  # Point GitHub branch protection's "required status checks" at this one
+  # job. It fails if any upstream gate failed, was cancelled, or was
+  # skipped, so adding a new gate above automatically tightens this check
+  # without needing the branch-protection config to be touched again.
+  ci-gate:
+    name: CI gate (all checks passed)
+    runs-on: ubuntu-latest
+    needs: [secret-scan, backend-verify, frontend-verify]
+    if: always()
+    steps:
+      - name: Require all gates green
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') }}" = "true" ] || \
+             [ "${{ contains(needs.*.result, 'cancelled') }}" = "true" ] || \
+             [ "${{ contains(needs.*.result, 'skipped') }}" = "true" ]; then
+            echo "One or more required gates did not pass:"
+            echo "  secret-scan:      ${{ needs.secret-scan.result }}"
+            echo "  backend-verify:   ${{ needs.backend-verify.result }}"
+            echo "  frontend-verify:  ${{ needs.frontend-verify.result }}"
+            exit 1
+          fi
+          echo "All required gates passed."

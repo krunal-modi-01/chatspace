@@ -16,6 +16,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.core.metrics import reset_metrics
+from app.core.metrics import snapshot as metrics_snapshot
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -120,6 +122,7 @@ class TestSendDmMessage:
         sender, token = await _authed_user(db_session)
         recipient, _ = await _authed_user(db_session)
 
+        reset_metrics()
         response = client.post(
             f"/v1/dms/{recipient.id}/messages",
             headers={**_auth_header(token), "Idempotency-Key": _idem_key()},
@@ -136,6 +139,13 @@ class TestSendDmMessage:
         assert body["edited_at"] is None
         assert body["deleted_at"] is None
         uuid.UUID(body["id"])
+
+        # Key metric (technical spec §9): "message send throughput" — a
+        # first-time (non-replay) DM send increments
+        # `message_send_success_total{conversation_kind=dm,replay=false}`
+        # (T39; code review finding 1/2).
+        counters = metrics_snapshot()["counters"]["message_send_success_total"]
+        assert counters["conversation_kind=dm,replay=false"] == 1
 
     async def test_missing_idempotency_key_is_400(
         self, migrated_db: None, client: TestClient, db_session: AsyncSession
@@ -200,6 +210,7 @@ class TestSendDmMessage:
     ) -> None:
         sender, token = await _authed_user(db_session)
 
+        reset_metrics()
         response = client.post(
             f"/v1/dms/{sender.id}/messages",
             headers={**_auth_header(token), "Idempotency-Key": _idem_key()},
@@ -208,6 +219,13 @@ class TestSendDmMessage:
 
         assert response.status_code == 422
         assert response.headers["content-type"] == "application/problem+json"
+
+        # Key metric (technical spec §9): "message send error rate" — the
+        # self-DM business-rule rejection increments
+        # `message_send_error_total{conversation_kind=dm,error_type=self_dm}`
+        # (T39; code review finding 1).
+        counters = metrics_snapshot()["counters"]["message_send_error_total"]
+        assert counters["conversation_kind=dm,error_type=self_dm"] == 1
 
     async def test_nonexistent_recipient_is_404(
         self, migrated_db: None, client: TestClient, db_session: AsyncSession

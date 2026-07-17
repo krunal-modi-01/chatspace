@@ -33,6 +33,7 @@ from app.core.ids import generate_id
 from app.core.jwt import create_access_token
 from app.core.redis_keys import channel_topic, dm_topic
 from app.core.security import hash_password
+from app.models.attachment import Attachment, AttachmentKind
 from app.models.channel import Channel
 from app.models.channel_member import ChannelMember, ChannelMemberRole
 from app.models.message import Message
@@ -115,6 +116,22 @@ async def _make_channel(db: AsyncSession, *, creator: User) -> Channel:
     db.add(ChannelMember(channel_id=channel.id, user_id=creator.id, role=ChannelMemberRole.ADMIN))
     await db.flush()
     return channel
+
+
+async def _make_attachment(db: AsyncSession, *, uploader: User) -> Attachment:
+    attachment = Attachment(
+        id=generate_id(),
+        message_id=None,
+        uploader_id=uploader.id,
+        kind=AttachmentKind.IMAGE,
+        content_type="image/png",
+        storage_key=f"key-{generate_id()}",
+        filename="screenshot.png",
+        byte_size=1024,
+    )
+    db.add(attachment)
+    await db.flush()
+    return attachment
 
 
 def _idem_key() -> str:
@@ -271,6 +288,50 @@ class TestChannelSendPublishesAfterCommit:
 
             # The replay must not trigger a second publish.
             await _no_further_event(pubsub)
+        finally:
+            await pubsub.unsubscribe(topic)
+            await pubsub.aclose()
+
+
+class TestCreatedEventCarriesBoundMedia:
+    """T29: the WS `message.created` payload's `media[]` must reflect the
+    attachments this send just bound — not the T24-era hardcoded `[]`.
+    """
+
+    async def test_bound_attachment_appears_in_the_created_event(
+        self,
+        migrated_db: None,
+        client: TestClient,
+        db_session: AsyncSession,
+        redis_client: Any,
+    ) -> None:
+        sender, token = await _authed_user(db_session)
+        channel = await _make_channel(db_session, creator=sender)
+        attachment = await _make_attachment(db_session, uploader=sender)
+        await db_session.commit()
+
+        topic = channel_topic(channel.id)
+        pubsub = await _subscribe(redis_client, topic)
+        try:
+            response = client.post(
+                f"/v1/channels/{channel.id}/messages",
+                headers={**_auth_header(token), "Idempotency-Key": _idem_key()},
+                json={"content": "shipping with a screenshot", "media_ids": [str(attachment.id)]},
+            )
+            assert response.status_code == 201
+            message_id = response.json()["id"]
+
+            event = await _next_event(pubsub)
+
+            assert event["data"]["id"] == message_id
+            assert event["data"]["media"] == [
+                {
+                    "media_id": str(attachment.id),
+                    "kind": "image",
+                    "filename": "screenshot.png",
+                    "size": 1024,
+                }
+            ]
         finally:
             await pubsub.unsubscribe(topic)
             await pubsub.aclose()

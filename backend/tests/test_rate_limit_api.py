@@ -21,6 +21,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.core.metrics import reset_metrics
+from app.core.metrics import snapshot as metrics_snapshot
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -149,6 +151,7 @@ class TestChannelMessageSendRateLimit:
         channel = await _make_channel(db_session, creator=sender)
         await db_session.commit()
 
+        reset_metrics()
         for _ in range(_MESSAGE_SEND_CAPACITY):
             response = client.post(
                 f"/v1/channels/{channel.id}/messages",
@@ -169,6 +172,17 @@ class TestChannelMessageSendRateLimit:
         body = over_limit.json()
         assert body["status"] == 429
         assert "correlation_id" in body
+
+        # Key metric (technical spec §9): "429 counts by endpoint class" —
+        # this is the REST-route rate-limit path (distinct from the WS
+        # frame-rate guard's own `endpoint_class=ws_frame`, already covered
+        # by `test_ws_connection_manager.py`), labeled by the matched route
+        # *template*, not the raw path (T39; code review finding 1).
+        # `APIRoute.path` reflects only the router's own declared path, not
+        # the `/v1` prefix applied by `include_router` at mount time (T39;
+        # verified against the actual running app rather than assumed).
+        counters = metrics_snapshot()["counters"]["rate_limit_rejected_total"]
+        assert counters["endpoint_class=/channels/{channel_id}/messages"] == 1
 
     async def test_different_users_have_independent_buckets(
         self, migrated_db: None, client: TestClient, db_session: AsyncSession, redis_available: bool

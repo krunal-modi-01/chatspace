@@ -57,6 +57,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.correlation import HEADER_NAME
 from app.core.deps import AuthenticatedUser, require_auth
 from app.core.errors import PROBLEM_CONTENT_TYPE, build_problem_body
+from app.core.metrics import increment_counter
 from app.core.pagination import CursorKey, PaginationError, decode_cursor, resolve_limit
 from app.core.rate_limit_deps import enforce_message_send_rate_limit
 from app.core.request_body import openapi_request_body, parse_body
@@ -220,18 +221,30 @@ async def send_channel_message_route(
             idempotency_key=key,
         )
     except ChannelNotFoundError:
+        increment_counter(
+            "message_send_error_total", conversation_kind="channel", error_type="channel_not_found"
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_CHANNEL_NOT_FOUND_DETAIL
         ) from None
     except NotChannelMemberError:
+        increment_counter(
+            "message_send_error_total", conversation_kind="channel", error_type="not_member"
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=_NOT_MEMBER_DETAIL
         ) from None
     except InvalidContentError:
+        increment_counter(
+            "message_send_error_total", conversation_kind="channel", error_type="invalid_content"
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=_INVALID_CONTENT_DETAIL
         ) from None
     except InvalidMediaError:
+        increment_counter(
+            "message_send_error_total", conversation_kind="channel", error_type="invalid_media"
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=_INVALID_MEDIA_DETAIL
         ) from None
@@ -244,12 +257,27 @@ async def send_channel_message_route(
         # this surface uses (built directly rather than via `HTTPException`,
         # which does not carry custom response headers through
         # `app.core.errors.http_exception_handler`).
+        increment_counter(
+            "message_send_error_total",
+            conversation_kind="channel",
+            error_type="idempotency_timeout",
+        )
         logger.warning(
             "idempotency claim resolution timed out",
             extra={"channel_id": str(channel_id), "sender_id": str(current.user_id)},
         )
         return _idempotency_timeout_response(instance=f"/v1/channels/{channel_id}/messages")
 
+    # Key metric (technical spec §9): "message send throughput and error rate".
+    # `replay=true` marks an idempotent replay (no new row written) so a
+    # client retry storm cannot silently inflate the real send-throughput
+    # signal (code review finding 2) -- callers computing throughput should
+    # filter/aggregate on `replay=false` only.
+    increment_counter(
+        "message_send_success_total",
+        conversation_kind="channel",
+        replay=str(not result.created).lower(),
+    )
     logger.info(
         "channel message sent",
         extra={
@@ -415,30 +443,51 @@ async def send_dm_message_route(
             idempotency_key=key,
         )
     except SelfDMError:
+        increment_counter("message_send_error_total", conversation_kind="dm", error_type="self_dm")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=_SELF_DM_SEND_DETAIL
         ) from None
     except RecipientNotFoundError:
+        increment_counter(
+            "message_send_error_total", conversation_kind="dm", error_type="recipient_not_found"
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=_RECIPIENT_NOT_FOUND_DETAIL
         ) from None
     except InvalidContentError:
+        increment_counter(
+            "message_send_error_total", conversation_kind="dm", error_type="invalid_content"
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=_INVALID_CONTENT_DETAIL
         ) from None
     except InvalidMediaError:
+        increment_counter(
+            "message_send_error_total", conversation_kind="dm", error_type="invalid_media"
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=_INVALID_MEDIA_DETAIL
         ) from None
     except IdempotencyResolutionTimeoutError:
         # Fail-closed per F40 (see `app.services.messages` module docstring)
         # — identical rationale/shape to the channel-send `503` above.
+        increment_counter(
+            "message_send_error_total", conversation_kind="dm", error_type="idempotency_timeout"
+        )
         logger.warning(
             "dm idempotency claim resolution timed out",
             extra={"recipient_id": str(user_id), "sender_id": str(current.user_id)},
         )
         return _idempotency_timeout_response(instance=f"/v1/dms/{user_id}/messages")
 
+    # Key metric (technical spec §9): "message send throughput and error rate".
+    # `replay=true` marks an idempotent replay (no new row written) --
+    # matches the channel-send counter's labeling (code review finding 2).
+    increment_counter(
+        "message_send_success_total",
+        conversation_kind="dm",
+        replay=str(not result.created).lower(),
+    )
     logger.info(
         "dm sent",
         extra={

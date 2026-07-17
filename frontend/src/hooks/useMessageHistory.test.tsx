@@ -136,6 +136,50 @@ describe('useMessageHistory', () => {
     expect(sendMessageMock).toHaveBeenCalledWith(CHANNEL, { content: 'hello world' }, expect.any(String));
   });
 
+  it('sends media_ids when provided (T35 attach-on-send) and omits the field otherwise', async () => {
+    fetchMessageHistoryMock.mockResolvedValueOnce({ items: [], next_cursor: null });
+    const { result } = renderHook(() => useMessageHistory(CHANNEL, CURRENT_USER_ID));
+    await waitFor(() => expect(result.current.isLoadingInitial).toBe(false));
+
+    sendMessageMock.mockResolvedValueOnce({
+      message: msg('01J8SERVER00000000000000001', { content: 'see attached' }),
+      created: true,
+    });
+
+    await act(async () => {
+      await result.current.sendMessage('see attached', ['01J8MEDIA00000000000000000']);
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      CHANNEL,
+      { content: 'see attached', media_ids: ['01J8MEDIA00000000000000000'] },
+      expect.any(String),
+    );
+  });
+
+  it('retries a failed send carrying the same media_ids as the original attempt', async () => {
+    fetchMessageHistoryMock.mockResolvedValueOnce({ items: [], next_cursor: null });
+    const { result } = renderHook(() => useMessageHistory(CHANNEL, CURRENT_USER_ID));
+    await waitFor(() => expect(result.current.isLoadingInitial).toBe(false));
+
+    sendMessageMock.mockRejectedValueOnce(new Error('network down'));
+    await act(async () => {
+      await result.current.sendMessage('retry with media', ['01J8MEDIA00000000000000000']);
+    });
+    const tempId = result.current.pendingSends[0].id;
+
+    sendMessageMock.mockResolvedValueOnce({ message: msg('01J8SERVER00000000000000002'), created: true });
+    await act(async () => {
+      await result.current.retrySend(tempId);
+    });
+
+    expect(sendMessageMock).toHaveBeenLastCalledWith(
+      CHANNEL,
+      { content: 'retry with media', media_ids: ['01J8MEDIA00000000000000000'] },
+      expect.any(String),
+    );
+  });
+
   it('marks a pending send as failed and allows retrying with the same idempotency key', async () => {
     fetchMessageHistoryMock.mockResolvedValueOnce({ items: [], next_cursor: null });
     const { result } = renderHook(() => useMessageHistory(CHANNEL, CURRENT_USER_ID));

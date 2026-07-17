@@ -2,6 +2,7 @@ import { useState, type JSX } from 'react';
 import type { ChannelMemberSummary, Message } from '../../api/types';
 import { Avatar } from '../ui/Avatar';
 import { Button } from '../ui/Button';
+import { MediaAttachment } from './MediaAttachment';
 
 export interface MessageTimelineProps {
   messages: Message[];
@@ -185,6 +186,16 @@ export function MessageTimeline({
                 </div>
               ) : (
                 <p className="text-body whitespace-pre-wrap text-[var(--color-text-primary)]">{message.content}</p>
+              )}
+
+              {!isDeleted && !isEditing && message.media.length > 0 && (
+                <ul aria-label="Attachments" className={`flex flex-col gap-2 pt-1 ${isOwn ? 'items-end' : 'items-start'}`}>
+                  {message.media.map((media) => (
+                    <li key={media.media_id}>
+                      <MediaAttachment media={media} />
+                    </li>
+                  ))}
+                </ul>
               )}
 
               {!isDeleted && !isEditing && isOwn && (onEdit || onDelete) && (

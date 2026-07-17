@@ -294,6 +294,29 @@ class Settings(BaseSettings):
         ..., description="Last name of the env-seeded first-run System Admin account."
     )
 
+    # --- Observability (T39, technical spec §9) ------------------------------
+    error_monitor_dsn: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Sentry-class error/uptime monitor DSN (see app.core.error_monitor). "
+            "Config-driven and OFF by default (unset/blank) -- most local/dev "
+            "environments never set this. Requires the optional 'sentry-sdk' "
+            "dependency (pyproject.toml's 'observability' extra); a configured "
+            "DSN without the package installed degrades to a logged no-op, "
+            "never a startup failure. Never logged."
+        ),
+    )
+    error_monitor_traces_sample_rate: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Fraction of transactions sampled for performance tracing when the "
+            "error monitor is enabled. 0.0 (default) disables tracing entirely "
+            "and only reports captured exceptions."
+        ),
+    )
+
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

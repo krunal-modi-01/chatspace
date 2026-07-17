@@ -117,6 +117,20 @@ describe('ReconnectingSocket', () => {
     expect(second.sent).toEqual([JSON.stringify({ type: 'join', conversation: CHANNEL })]);
   });
 
+  it('sends a typing frame while open, and drops it silently while not connected (T34)', () => {
+    const { client } = makeClient();
+    client.connect();
+    const socket = lastSocket();
+
+    // Not open yet — fire-and-forget, no send queue.
+    client.sendTyping(CHANNEL);
+    expect(socket.sent).toEqual([]);
+
+    socket.simulateOpen();
+    client.sendTyping(CHANNEL);
+    expect(socket.sent).toEqual([JSON.stringify({ type: 'typing', conversation: CHANNEL })]);
+  });
+
   it('surfaces a well-formed server frame via onFrame', () => {
     const { client, frames } = makeClient();
     client.connect();

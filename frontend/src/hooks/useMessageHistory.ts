@@ -23,6 +23,9 @@ export type PendingSendStatus = 'sending' | 'failed';
 export interface PendingSend {
   id: string;
   content: string;
+  /** `media_id`s attached at send time (T35) — carried through retry so a
+   * retried send still attaches the same media. */
+  mediaIds: string[];
   idempotencyKey: string;
   status: PendingSendStatus;
   createdAt: string;
@@ -51,7 +54,10 @@ export interface UseMessageHistoryResult {
    * `deleteMessage` that aren't already carried on a `PendingSend` row
    * (e.g. a same-tick validation error before any optimistic row exists). */
   actionError: unknown;
-  sendMessage: (content: string) => Promise<void>;
+  /** `mediaIds` (T35) defaults to none — omit entirely for a text-only send
+   * so the request body matches the pre-T35 shape exactly (no empty
+   * `media_ids: []` sent when there's nothing to attach). */
+  sendMessage: (content: string, mediaIds?: string[]) => Promise<void>;
   retrySend: (tempId: string) => Promise<void>;
   discardFailedSend: (tempId: string) => void;
   loadOlder: () => Promise<void>;
@@ -179,28 +185,34 @@ export function useMessageHistory(
     }
   }, []);
 
-  const performSend = useCallback(async (tempId: string, content: string, idempotencyKey: string) => {
-    const current = targetRef.current;
-    if (current === null) {
-      return;
-    }
-    try {
-      const { message } = await sendMessageApi(current, { content }, idempotencyKey);
-      setPendingSends((prev) => prev.filter((pending) => pending.id !== tempId));
-      setMessageMap((prev) => upsertMessages(prev, [message]));
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : 'Failed to send message.';
-      const retryAfterSeconds = err instanceof ApiError ? err.retryAfterSeconds : undefined;
-      setPendingSends((prev) =>
-        prev.map((pending) =>
-          pending.id === tempId ? { ...pending, status: 'failed', error: detail, retryAfterSeconds } : pending,
-        ),
-      );
-    }
-  }, []);
+  const performSend = useCallback(
+    async (tempId: string, content: string, mediaIds: string[], idempotencyKey: string) => {
+      const current = targetRef.current;
+      if (current === null) {
+        return;
+      }
+      try {
+        // Only include `media_ids` when non-empty so a text-only send's
+        // request body is byte-for-byte identical to the pre-T35 shape.
+        const request = mediaIds.length > 0 ? { content, media_ids: mediaIds } : { content };
+        const { message } = await sendMessageApi(current, request, idempotencyKey);
+        setPendingSends((prev) => prev.filter((pending) => pending.id !== tempId));
+        setMessageMap((prev) => upsertMessages(prev, [message]));
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : 'Failed to send message.';
+        const retryAfterSeconds = err instanceof ApiError ? err.retryAfterSeconds : undefined;
+        setPendingSends((prev) =>
+          prev.map((pending) =>
+            pending.id === tempId ? { ...pending, status: 'failed', error: detail, retryAfterSeconds } : pending,
+          ),
+        );
+      }
+    },
+    [],
+  );
 
   const sendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, mediaIds: string[] = []) => {
       setActionError(null);
       const validationError = validateMessageContent(content);
       if (validationError !== null) {
@@ -216,13 +228,14 @@ export function useMessageHistory(
       const pending: PendingSend = {
         id: tempId,
         content,
+        mediaIds,
         idempotencyKey,
         status: 'sending',
         createdAt: new Date().toISOString(),
         error: null,
       };
       setPendingSends((prev) => [...prev, pending]);
-      await performSend(tempId, content, idempotencyKey);
+      await performSend(tempId, content, mediaIds, idempotencyKey);
     },
     [currentUserId, performSend],
   );
@@ -241,7 +254,7 @@ export function useMessageHistory(
       // replay of the same key is safe (no duplicate row) even if the
       // first attempt actually succeeded server-side but the response was
       // lost client-side.
-      await performSend(tempId, pending.content, pending.idempotencyKey);
+      await performSend(tempId, pending.content, pending.mediaIds, pending.idempotencyKey);
     },
     [pendingSends, performSend],
   );

@@ -134,7 +134,7 @@ describe('MessageList', () => {
 
     const user = userEvent.setup();
     await user.type(screen.getByRole('textbox'), 'hello{Enter}');
-    expect(sendMessage).toHaveBeenCalledWith('hello');
+    expect(sendMessage).toHaveBeenCalledWith('hello', []);
   });
 
   it('preserves scroll position when older messages are prepended (no scroll-jump)', async () => {
@@ -177,5 +177,37 @@ describe('MessageList', () => {
     render(<MessageList channelId="01J0CHANNEL0000000000000000" />);
 
     expect(screen.getByText(/could not load member details/i)).toBeInTheDocument();
+  });
+
+  it('shows the reconnecting banner only when the caller reports a reconnecting live socket (T34)', () => {
+    useMessageHistoryMock.mockReturnValue(baseHistoryResult());
+    const { rerender } = render(<MessageList channelId="01J0CHANNEL0000000000000000" wsStatus="open" />);
+    expect(screen.queryByText(/reconnecting/i)).not.toBeInTheDocument();
+
+    rerender(<MessageList channelId="01J0CHANNEL0000000000000000" wsStatus="reconnecting" />);
+    expect(screen.getByText(/reconnecting/i)).toBeInTheDocument();
+  });
+
+  it('renders a typing indicator resolved against the channel member identity map (T34)', () => {
+    useChannelMembersMock.mockReturnValue({
+      membersById: new Map([
+        ['user-2', { user_id: 'user-2', username: 'bob', first_name: 'Bob', last_name: 'Smith', avatar_url: null, role: 'member', joined_at: '2026-07-01T00:00:00.000Z' }],
+      ]),
+      isLoading: false,
+      error: null,
+    });
+    useMessageHistoryMock.mockReturnValue(baseHistoryResult());
+    render(<MessageList channelId="01J0CHANNEL0000000000000000" typingUserIds={['user-2']} />);
+
+    expect(screen.getByText('Bob Smith is typing…')).toBeInTheDocument();
+  });
+
+  it('forwards onTyping to the composer (T34)', async () => {
+    const onTyping = vi.fn();
+    useMessageHistoryMock.mockReturnValue(baseHistoryResult());
+    render(<MessageList channelId="01J0CHANNEL0000000000000000" onTyping={onTyping} />);
+
+    await userEvent.setup().type(screen.getByRole('textbox'), 'hi');
+    expect(onTyping).toHaveBeenCalled();
   });
 });

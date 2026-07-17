@@ -171,6 +171,37 @@ export interface ListMessagesParams {
 }
 
 // ---------------------------------------------------------------------------
+// Media (T35) — two-phase upload/fetch (`POST /v1/media`, `GET
+// /v1/media/{media_id}/url`). Attach on send via `SendMessageRequest.media_ids`
+// below; render/download via `MessageMedia` (already defined above).
+// ---------------------------------------------------------------------------
+
+/** `kind` is an open enum server-side (`image`/`file`/`video` today) —
+ * clients must tolerate unknown values. */
+export type MediaKind = 'image' | 'file' | 'video' | (string & {});
+
+/** `201` body of `POST /v1/media` (multipart upload, phase 1). */
+export interface MediaUploadResponse {
+  media_id: string;
+  kind: MediaKind;
+  content_type: string;
+  filename: string;
+  size: number;
+  created_at: string;
+}
+
+/** `200` body of `GET /v1/media/{media_id}/url` — a fresh, short-lived (5
+ * min) presigned GET URL, issued at fetch time and never cached/persisted
+ * beyond the current render. */
+export interface MediaUrlResponse {
+  url: string;
+  expires_at: string;
+  content_type: string;
+  filename: string;
+  size: number;
+}
+
+// ---------------------------------------------------------------------------
 // Channels & membership (T31) — create/browse/join/leave + admin membership
 // management. Messages are out of scope here (T32).
 // ---------------------------------------------------------------------------

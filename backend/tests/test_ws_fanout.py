@@ -522,6 +522,75 @@ class TestTypingTyperId:
         assert _typing_typer_id({"type": "typing", "data": {"user_id": "not-a-uuid"}}) is None
 
 
+class TestDeliveryLagMs:
+    """Unit tests for `app.ws.fanout._delivery_lag_ms` (T39 delivery-lag SLI)."""
+
+    def test_computes_a_non_negative_lag_for_message_created(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from app.ws.fanout import _delivery_lag_ms
+
+        created_at = (datetime.now(UTC) - timedelta(milliseconds=250)).isoformat()
+        payload = {"type": "message.created", "data": {"created_at": created_at}}
+
+        lag_ms = _delivery_lag_ms(payload)
+
+        assert lag_ms is not None
+        assert lag_ms >= 200  # allow scheduling jitter, comfortably below the 250ms floor
+
+    def test_returns_none_for_non_created_event_types(self) -> None:
+        from app.ws.fanout import _delivery_lag_ms
+
+        assert _delivery_lag_ms({"type": "message.edited", "data": {"created_at": "x"}}) is None
+        assert _delivery_lag_ms({"type": "presence", "data": {}}) is None
+
+    def test_returns_none_when_created_at_is_missing_or_malformed(self) -> None:
+        from app.ws.fanout import _delivery_lag_ms
+
+        assert _delivery_lag_ms({"type": "message.created", "data": {}}) is None
+        assert _delivery_lag_ms({"type": "message.created"}) is None
+        assert (
+            _delivery_lag_ms({"type": "message.created", "data": {"created_at": "not-a-date"}})
+            is None
+        )
+
+    def test_naive_datetime_is_treated_as_utc(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from app.ws.fanout import _delivery_lag_ms
+
+        naive = (datetime.now(UTC) - timedelta(milliseconds=100)).replace(tzinfo=None)
+        payload = {"type": "message.created", "data": {"created_at": naive.isoformat()}}
+
+        lag_ms = _delivery_lag_ms(payload)
+
+        assert lag_ms is not None
+        assert lag_ms >= 0
+
+    async def test_relaying_a_message_created_event_observes_the_histogram(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from app.core import metrics as metrics_module
+        from app.ws.fanout import PubSubRelay
+
+        metrics_module.reset_metrics()
+        manager = ConnectionManager()
+        relay = PubSubRelay(object(), manager=manager)  # type: ignore[arg-type]
+
+        created_at = (datetime.now(UTC) - timedelta(milliseconds=10)).isoformat()
+        payload = {
+            "type": "message.created",
+            "conversation": {"kind": "channel", "channel_id": str(uuid4())},
+            "data": {"created_at": created_at},
+        }
+        message = {"channel": "chan:x", "data": json.dumps(payload)}
+
+        await relay._handle_message(message)
+
+        stats = metrics_module.snapshot()["histograms"]["message_delivery_lag_ms"]["_total"]
+        assert stats["count"] == 1
+
+
 class _FlakyPubSub:
     """Stands in for `redis.asyncio.client.PubSub`, failing `psubscribe`
     a configurable number of times before succeeding.

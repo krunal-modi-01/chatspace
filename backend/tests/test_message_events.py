@@ -17,6 +17,7 @@ from redis.exceptions import RedisError
 
 from app.core.ids import generate_id
 from app.core.redis_keys import channel_topic, dm_topic
+from app.models.attachment import Attachment, AttachmentKind
 from app.models.message import Message
 from app.services.message_events import (
     build_created_event,
@@ -27,6 +28,22 @@ from app.services.message_events import (
     publish_message_edited,
     publish_message_event,
 )
+
+
+def _attachment(**overrides: object) -> Attachment:
+    defaults: dict[str, object] = {
+        "id": generate_id(),
+        "message_id": None,
+        "uploader_id": uuid4(),
+        "kind": AttachmentKind.IMAGE,
+        "content_type": "image/png",
+        "storage_key": f"key-{generate_id()}",
+        "filename": "screenshot.png",
+        "byte_size": 20481,
+        "created_at": datetime(2026, 7, 2, 14, 31, 7, 482000, tzinfo=UTC),
+    }
+    defaults.update(overrides)
+    return Attachment(**defaults)  # type: ignore[arg-type]
 
 
 def _channel_message(**overrides: object) -> Message:
@@ -79,16 +96,47 @@ class TestBuildCreatedEvent:
             "deleted_at": None,
         }
 
-    def test_media_is_always_present_and_empty_never_dropped(self) -> None:
-        """T24 scope explicitly excludes wiring real attachments through the
-        event (T29's job), but the frozen envelope's `data.media` field
-        must never be dropped — only ever an empty array here.
+    def test_media_is_always_present_and_empty_when_none_passed(self) -> None:
+        """The frozen envelope's `data.media` field must never be dropped —
+        an empty array when the caller passes no attachments (the default).
         """
 
         event = build_created_event(_channel_message())
 
         assert "media" in event["data"]
         assert event["data"]["media"] == []
+
+    def test_bound_attachment_is_serialized_to_the_frozen_media_element_shape(self) -> None:
+        """T29: a bound attachment must appear in `data.media[]` using the
+        exact `{media_id, kind, filename, size}` element shape (contract
+        line 710) — no `content_type`/`url` (those are T35's presigned-GET
+        concern).
+        """
+
+        message = _channel_message()
+        attachment = _attachment(
+            kind=AttachmentKind.IMAGE, filename="screenshot.png", byte_size=20481
+        )
+
+        event = build_created_event(message, media=[attachment])
+
+        assert event["data"]["media"] == [
+            {
+                "media_id": str(attachment.id),
+                "kind": "image",
+                "filename": "screenshot.png",
+                "size": 20481,
+            }
+        ]
+
+    def test_multiple_attachments_preserve_call_order(self) -> None:
+        message = _channel_message()
+        first = _attachment(filename="a.png")
+        second = _attachment(filename="b.png")
+
+        event = build_created_event(message, media=[first, second])
+
+        assert [m["filename"] for m in event["data"]["media"]] == ["a.png", "b.png"]
 
     def test_dm_conversation_uses_the_persisted_recipient_id(self) -> None:
         message = _dm_message()
@@ -126,6 +174,25 @@ class TestBuildEditedEvent:
         assert edited["data"]["id"] == created["data"]["id"]
         assert edited["conversation"] == created["conversation"]
 
+    def test_currently_bound_media_is_carried_through(self) -> None:
+        """T29: an edit doesn't change bound attachments, but the envelope's
+        `data.media[]` must still reflect them, not a hardcoded `[]`.
+        """
+
+        message = _channel_message(edited_at=datetime.now(UTC))
+        attachment = _attachment()
+
+        event = build_edited_event(message, media=[attachment])
+
+        assert event["data"]["media"] == [
+            {
+                "media_id": str(attachment.id),
+                "kind": "image",
+                "filename": attachment.filename,
+                "size": attachment.byte_size,
+            }
+        ]
+
 
 class TestBuildDeletedEvent:
     def test_data_is_exactly_id_conversation_deleted_at(self) -> None:
@@ -146,6 +213,42 @@ class TestBuildDeletedEvent:
         assert "content" not in event["data"]
         assert "sender_id" not in event["data"]
         assert "media" not in event["data"]
+
+
+class TestPublishForwardsMedia:
+    """T29: `publish_message_created`/`publish_message_edited` must forward
+    the `media` kwarg into the published payload, not silently drop it.
+    """
+
+    async def test_publish_message_created_forwards_media_into_the_payload(self) -> None:
+        message = _channel_message()
+        attachment = _attachment()
+        redis = AsyncMock()
+
+        await publish_message_created(redis, message, media=[attachment])
+
+        redis.publish.assert_awaited_once()
+        _topic, payload = redis.publish.await_args.args
+        published = json.loads(payload)
+        assert published["data"]["media"] == [
+            {
+                "media_id": str(attachment.id),
+                "kind": "image",
+                "filename": attachment.filename,
+                "size": attachment.byte_size,
+            }
+        ]
+
+    async def test_publish_message_edited_forwards_media_into_the_payload(self) -> None:
+        message = _channel_message(edited_at=datetime.now(UTC))
+        attachment = _attachment()
+        redis = AsyncMock()
+
+        await publish_message_edited(redis, message, media=[attachment])
+
+        _topic, payload = redis.publish.await_args.args
+        published = json.loads(payload)
+        assert published["data"]["media"][0]["media_id"] == str(attachment.id)
 
 
 class TestTopicDerivation:

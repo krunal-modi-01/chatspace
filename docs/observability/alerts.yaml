@@ -1,0 +1,82 @@
+# Symptom-based alert definitions (T39, technical spec §9).
+#
+# Declarative, version-controlled alert manifest for chatspace v1's
+# Sentry-class error/uptime monitor + the metrics `GET /v1/internal/metrics`
+# exposes (`app.core.metrics`, `app.api.metrics`). This is not a Terraform/
+# Prometheus-rule artifact — chatspace runs no metrics-alerting stack at
+# this scale (CLAUDE.md: "no need for a full metrics stack unless usage
+# grows materially") — it is the human-readable, reviewable source of
+# truth for whichever operator tool (the Sentry-class monitor's own
+# alerting, or a small external uptime/dashboard tool polling
+# `/v1/internal/metrics`) is wired to page on these symptoms. Each entry
+# below maps 1:1 to technical spec §9's alert list.
+#
+# Every `source_metric` referenced here is emitted content-free (F68/SEC):
+# labels are always a small fixed vocabulary (endpoint class, scope,
+# status code, exception class name) — never a raw id, email, or message
+# body. See `app.core.metrics`'s module docstring for that contract.
+
+alerts:
+  - name: error-rate-spike
+    symptom: "Elevated rate of unhandled 5xx responses across the API surface."
+    source_metric: http_error_total
+    source: "app.core.errors.unhandled_exception_handler (counter increment) + Sentry-class error monitor (app.core.error_monitor)"
+    condition: "5xx rate over a 5-minute rolling window exceeds the message-send-success SLO's implied error budget (>0.1% of requests, technical spec §9 SLO)."
+    severity: high
+    owner: devops-engineer / backend-engineer
+
+  - name: uptime-probe-failure
+    symptom: "The external uptime probe cannot reach the service (or GET /v1/healthz stops returning 200)."
+    source_metric: null
+    source: "GET /v1/healthz (app.api.health) polled by the Sentry-class monitor's uptime check, or an external prober."
+    condition: "Liveness probe fails N consecutive checks (operator-tunable; recommended 3 at a 1-minute interval)."
+    severity: critical
+    owner: devops-engineer
+
+  - name: delivery-latency-slo-breach
+    symptom: "Real-time message delivery (send -> publish -> relay) is slower than the documented SLO."
+    source_metric: message_delivery_lag_ms
+    source: "app.ws.fanout._delivery_lag_ms (histogram observation on message.created relay)"
+    condition: "p95 of message_delivery_lag_ms exceeds 500ms over a 5-minute window (technical spec §9 SLI/SLO: 'p95 delivery latency -> SLO < 500ms at ~1,000 users')."
+    severity: high
+    owner: backend-engineer / infrastructure-engineer
+
+  - name: redis-unreachable
+    symptom: "Redis is unreachable, degrading live delivery/presence/rate-limiting simultaneously (single-Redis SPOF, accepted risk per technical spec §9/§12)."
+    source_metric: redis_available
+    source: "GET /v1/internal/metrics -> redis_available (app.api.metrics, backed by app.services.readiness.check_redis) + GET /v1/readyz"
+    condition: "redis_available is false for more than 1 consecutive check (recommended 1-minute polling interval)."
+    severity: critical
+    owner: infrastructure-engineer
+
+  - name: db-pool-exhaustion
+    symptom: "The asyncpg connection pool is saturated, so new requests start queuing/timing out on `db_pool_timeout_seconds`."
+    source_metric: db_pool
+    source: "GET /v1/internal/metrics -> db_pool.checked_out / db_pool.size (app.api.metrics, app.db.engine)"
+    condition: "checked_out / (size + max_overflow) exceeds 90% sustained for more than 2 minutes."
+    severity: high
+    owner: infrastructure-engineer / database-engineer
+
+  - name: email-send-failure-rate
+    symptom: "Invite/reset transactional email is failing to deliver (ADR-0010 fail-loud path)."
+    source_metric: email_send_failure_total
+    source: "app.services.email._send_with_retry (counter increment on bounded-retry exhaustion, labeled by message_type)"
+    condition: "email_send_failure_total / (email_send_failure_total + email_send_success_total) exceeds 5% over a 15-minute window, or any failure for message_type=invite (System-Admin-visible, no user self-serve fallback)."
+    severity: medium
+    owner: backend-engineer
+
+  - name: backup-job-failure
+    symptom: "The daily managed-Postgres backup job did not complete successfully."
+    source_metric: null
+    source: "Managed platform (Render/Fly.io/Railway per ADR-0008) backup-job status -- outside application code; wired via the platform's own job/alerting hooks, not app.core.metrics."
+    condition: "Most recent scheduled backup job reports failure, or no successful backup completed within the last 25 hours (technical spec §9: 'RPO up to 24h')."
+    severity: high
+    owner: infrastructure-engineer
+
+# Not sourced from app.core.metrics: `uptime-probe-failure` and
+# `backup-job-failure` are platform/infra-level signals (a synthetic
+# prober, and the managed Postgres provider's own backup-job status)
+# that this application process does not itself measure or expose --
+# wiring the actual paging integration for those two is an infrastructure
+# task against whichever platform is chosen (ADR-0008), not application
+# code.

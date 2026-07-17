@@ -79,7 +79,7 @@ export function MyChannelsNav(): JSX.Element {
         <div role="status" aria-live="polite" className="px-2 text-body text-[var(--color-text-secondary)]">
           Loading your channels…
         </div>
-      ) : error === null && channels.length === 0 ? (
+      ) : error !== null ? null : channels.length === 0 ? (
         <div className="px-2 text-body text-[var(--color-text-secondary)]">
           <p>You haven&apos;t joined any channels yet.</p>
           <NavLink

@@ -71,6 +71,7 @@ from starlette.websockets import WebSocket, WebSocketState
 
 from app.core.config import Settings, get_settings
 from app.core.correlation import generate_correlation_id, set_correlation_id
+from app.core.metrics import increment_counter
 from app.core.redis_keys import channel_topic, dm_topic, user_topic
 from app.db.redis import get_redis_client
 from app.db.session import get_sessionmaker
@@ -304,6 +305,14 @@ async def _connection_loop(
             return
 
         if limiter.record_and_check():
+            # Key metric (technical spec §9): "429 counts by endpoint class"
+            # -- this connection-local WS frame-rate guard is a distinct
+            # mechanism from the REST `429`s `app.core.errors
+            # .rate_limit_exceeded_handler` counts (see `app.ws.rate_limit`
+            # module docstring), but it is still a rate-limit rejection an
+            # operator needs visibility into, so it shares the same counter
+            # under its own `endpoint_class` label.
+            increment_counter("rate_limit_rejected_total", endpoint_class="ws_frame")
             logger.info(
                 "ws frame rate limit exceeded; closing connection",
                 extra={"user_id": str(auth.user_id)},

@@ -22,6 +22,7 @@ from app.api.router import api_router
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.core.config import get_settings
 from app.core.correlation import HEADER_NAME
+from app.core.error_monitor import configure_error_monitor
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import correlation_id_middleware
@@ -105,6 +106,9 @@ def create_app() -> FastAPI:
 
     settings = get_settings()
     configure_logging(settings.log_level)
+    # T39: config-driven, OFF by default (see app.core.error_monitor) --
+    # never a Phase-0 fail-loud gate, unlike verify_email_config below.
+    configure_error_monitor(settings)
 
     # Phase-0 non-skippable prerequisite (ADR-0010, technical spec §10):
     # transactional email must be usable before the app is allowed to

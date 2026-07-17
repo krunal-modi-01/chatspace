@@ -431,6 +431,28 @@ async def db_session(migrated_db: None) -> AsyncIterator[AsyncSession]:
     await engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _reset_metrics_registry() -> None:
+    """Reset `app.core.metrics`'s process-wide counter/gauge registry before every test.
+
+    T39 code review finding 2: about a dozen tests manually call
+    `reset_metrics()` at the point each happens to need it. That works
+    today only because there's no `pytest-randomly`/`xdist` reordering
+    configured (`pyproject.toml` has no such plugin) and every existing
+    manual call happens to be placed correctly. A new test that forgets
+    the manual reset -- or future adoption of parallel/randomized test
+    execution -- would otherwise produce order-dependent flakes on
+    exact-count assertions (`== 1`). This autouse fixture makes a clean
+    registry the default for every test; existing manual `reset_metrics()`
+    calls mid-test remain harmless (a reset of an already-empty registry).
+    """
+
+    from app.core.metrics import reset_metrics
+
+    reset_metrics()
+    yield
+
+
 @pytest.fixture(scope="session")
 def redis_available() -> bool:
     """Probe once per test session whether the local test Redis is up.

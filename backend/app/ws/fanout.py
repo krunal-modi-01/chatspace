@@ -56,16 +56,58 @@ import asyncio
 import contextlib
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
 
+from app.core.metrics import observe_histogram
 from app.ws.connection_manager import ConnectionManager, connection_manager
 from app.ws.typing_events import TYPING_EVENT_TYPE
 
 logger = logging.getLogger(__name__)
+
+_MESSAGE_CREATED_TYPE = "message.created"
+
+
+def _delivery_lag_ms(payload: dict[str, Any]) -> float | None:
+    """Real-time delivery lag SLI (technical spec §9: "send -> publish ->
+    relay"), measured on `message.created` only -- the primary latency
+    signal the SLO (p95 < 500ms at ~1,000 users) is defined against.
+
+    Computed here, at the last hop before a local socket ever sees the
+    event, so it captures the full persist-then-publish-then-relay
+    pipeline: elapsed time between `messages.created_at` (set at insert,
+    `app.services.messages`) and the moment *this* instance's relay
+    dequeued the pub/sub message. Returns `None` for any other event type
+    or a malformed/missing `created_at` -- never raises, since a metrics
+    miss must never interrupt fan-out delivery itself.
+    """
+
+    if payload.get("type") != _MESSAGE_CREATED_TYPE:
+        return None
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+
+    created_at_raw = data.get("created_at")
+    if not isinstance(created_at_raw, str):
+        return None
+
+    try:
+        created_at = datetime.fromisoformat(created_at_raw)
+    except ValueError:
+        return None
+
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+
+    lag_ms = (datetime.now(UTC) - created_at).total_seconds() * 1000
+    return max(0.0, lag_ms)
+
 
 def _typing_typer_id(payload: dict[str, Any]) -> UUID | None:
     """Extract the typer's `user_id` from a `typing` envelope, else `None`.
@@ -263,6 +305,10 @@ class PubSubRelay:
                 extra={"topic": topic},
             )
             return
+
+        lag_ms = _delivery_lag_ms(payload)
+        if lag_ms is not None:
+            observe_histogram("message_delivery_lag_ms", lag_ms)
 
         await self._manager.broadcast_to_topic(
             topic, payload, exclude_user_id=_typing_typer_id(payload)

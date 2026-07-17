@@ -1,5 +1,6 @@
 import type { JSX } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
+import { useChannelMembershipSocket } from '../hooks/useChannelMembershipSocket';
 import { MyChannelsNav } from './nav/MyChannelsNav';
 import { ThemeToggle } from './ui/ThemeToggle';
 import { UserMenu } from './UserMenu';
@@ -15,8 +16,16 @@ const NAV_LINK_CLASSES =
  * and a content outlet for feature screens. Stays a flat, neutral surface
  * per architecture/design-tokens.md §1 — no ambient background here, only
  * the elevation treatment from §6 (the sidebar uses the same
- * `--color-surface-raised` layer as the header). */
+ * `--color-surface-raised` layer as the header).
+ *
+ * Also owns the app-level `channel.member_added`/`channel.member_removed`
+ * WS listener (T51, `useChannelMembershipSocket`) — mounted once here so
+ * the My Channels list (and any open channel view) stays live for the
+ * whole authenticated session, not just while a single conversation is
+ * open. */
 export function AppShell(): JSX.Element {
+  useChannelMembershipSocket();
+
   return (
     <div className="flex min-h-screen flex-col bg-[var(--color-surface)]">
       <header className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-raised)] px-4 py-3">

@@ -38,6 +38,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.body_limit import BodyTooLargeError
 from app.core.correlation import HEADER_NAME, get_correlation_id
+from app.core.error_monitor import capture_exception
+from app.core.metrics import increment_counter
 from app.core.pagination import PaginationError
 from app.core.password_policy import PasswordPolicyError
 from app.core.rate_limit import RateLimitExceededError, RateLimitUnavailableError
@@ -79,6 +81,31 @@ _SLUGS_BY_STATUS: dict[int, str] = {
     status.HTTP_500_INTERNAL_SERVER_ERROR: "internal-error",
     status.HTTP_503_SERVICE_UNAVAILABLE: "service-unavailable",
 }
+
+
+def _endpoint_class(request: Request) -> str:
+    """A low-cardinality, content-free label for the `429`/error-rate metrics.
+
+    Prefers the matched route's *template* path (e.g.
+    `/v1/channels/{channel_id}/messages`) over the raw request path, so a
+    metric label never carries a caller-supplied id/value -- only the
+    fixed route shape. Falls back to the raw path for the rare case
+    nothing matched a route (e.g. a 404 on a genuinely unknown path).
+
+    Code review note (T39 finding 4): this fallback is unreachable for the
+    two call sites that use it today (`rate_limit_exceeded_handler`,
+    `unhandled_exception_handler` -- both only fire on an already-matched
+    route), so it cannot currently leak attacker-controlled label
+    cardinality into the in-process registry. If a future call site
+    invokes this on a pre-routing hook (e.g. a raw ASGI middleware), treat
+    the raw-path branch as a real cardinality risk, not just a formality
+    -- see `tests/test_errors.py`'s `test_endpoint_class_*` cases for the
+    pinned invariant.
+    """
+
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    return path if isinstance(path, str) else request.url.path
 
 
 def _title_for(status_code: int) -> str:
@@ -290,6 +317,9 @@ async def rate_limit_exceeded_handler(request: Request, exc: Exception) -> JSONR
     """
 
     assert isinstance(exc, RateLimitExceededError)
+    # Key metric (technical spec §9): "429 counts by endpoint class" -- the
+    # route *template*, never a raw path containing a caller-supplied id.
+    increment_counter("rate_limit_rejected_total", endpoint_class=_endpoint_class(request))
     response = _problem_response(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail="Too many requests. Please slow down and retry after the indicated delay.",
@@ -359,6 +389,18 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         "unhandled exception",
         extra={"exception_type": type(exc).__name__, "path": request.url.path},
     )
+    # Key metric (technical spec §9, "error-rate spike" alert): a coarse,
+    # content-free error-rate signal by route template + exception class.
+    increment_counter(
+        "http_error_total",
+        status_code="500",
+        endpoint_class=_endpoint_class(request),
+        exception_type=type(exc).__name__,
+    )
+    # T39: report to the Sentry-class monitor if configured -- a silent
+    # no-op otherwise (see app.core.error_monitor). Never raises, so this
+    # can never turn one unhandled exception into a second one.
+    capture_exception(exc)
     return _problem_response(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="An unexpected error occurred. Reference the correlation id for support.",

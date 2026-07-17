@@ -15,13 +15,19 @@ existing row (an idempotent replay) rather than creating one, since
 that call did not itself commit anything new. This module has no
 opinion on *when* to call it; that ordering is enforced by the caller.
 
-**Media**: the frozen envelope's `data.media[]` array is part of the
-contract shape (line 662) and is therefore always present here — never
-dropped — but this task (T24) does not wire actual attachment rows
-through it (that lands with T29's media flow); every event this module
-builds carries `media: []`. Flagged for the api-reviewer: once T29
-lands, `media` should be populated from the message's bound attachments
-the same way `app.schemas.messages.MessageObject` already does.
+**Media (T29)**: the frozen envelope's `data.media[]` array is part of
+the contract shape (line 662) and is therefore always present — never
+dropped. `build_created_event`/`build_edited_event` (and their
+`publish_*` wrappers) take an optional `media: Sequence[Attachment]`
+(default `()`, matching T24's original "always an empty array" shape
+for any caller that does not pass one) and serialize it to the exact
+same `{media_id, kind, filename, size}` element shape as
+`app.schemas.messages.MediaDescriptor` — the WS envelope and the REST
+`message` object's `media[]` must never drift from each other.
+`app.services.messages` passes the message's just-bound (create) /
+currently-bound (edit) attachments through; `message.deleted` never
+carries `media` at all (unchanged from T24 — the field is omitted
+outright, not emptied, per the contract's delete-event shape).
 
 **Fail-open on publish**: per ADR-0004 and the technical spec's Redis
 risk register, a failed publish only delays live delivery — the row is
@@ -35,12 +41,14 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 from redis.asyncio import Redis
 
 from app.core.redis_fail_modes import redis_fail_open
 from app.core.redis_keys import channel_topic, dm_topic
+from app.models.attachment import Attachment, AttachmentKind
 from app.models.message import Message
 
 logger = logging.getLogger(__name__)
@@ -89,7 +97,32 @@ def _topic_for(message: Message) -> str:
     return dm_topic(message.sender_id, message.recipient_id)
 
 
-def _full_data(message: Message) -> dict[str, Any]:
+def _media_payload(media: Sequence[Attachment]) -> list[dict[str, Any]]:
+    """Serialize bound attachments to the frozen WS `media[]` element shape (T29).
+
+    `{media_id, kind, filename, size}` — deliberately the same fields, in
+    the same order, as `app.schemas.messages.MediaDescriptor.from_attachment`
+    (no `content_type`/`url`; a presigned URL is fetched separately via
+    `GET /v1/media/{media_id}/url`, T35). Kept as a plain dict builder
+    (not the Pydantic schema) so this module has no import-time
+    dependency on `app.schemas`.
+    """
+
+    payload: list[dict[str, Any]] = []
+    for attachment in media:
+        kind = attachment.kind
+        payload.append(
+            {
+                "media_id": str(attachment.id),
+                "kind": kind.value if isinstance(kind, AttachmentKind) else str(kind),
+                "filename": attachment.filename,
+                "size": attachment.byte_size,
+            }
+        )
+    return payload
+
+
+def _full_data(message: Message, *, media: Sequence[Attachment] = ()) -> dict[str, Any]:
     """The `data` object shared by `message.created`/`message.edited` (contract line 656-666)."""
 
     return {
@@ -99,32 +132,33 @@ def _full_data(message: Message) -> dict[str, Any]:
         "sender_id": str(message.sender_id),
         "content": message.content,
         # Always present per the frozen envelope shape — never dropped.
-        # Populated from bound attachments once T29 lands; see module
-        # docstring.
-        "media": [],
+        # Populated (T29) from the message's bound attachments; empty
+        # when the caller passes none (the T24 default, still correct
+        # for a message with no media).
+        "media": _media_payload(media),
         "created_at": _iso(message.created_at),
         "edited_at": _iso(message.edited_at),
         "deleted_at": _iso(message.deleted_at),
     }
 
 
-def build_created_event(message: Message) -> dict[str, Any]:
+def build_created_event(message: Message, *, media: Sequence[Attachment] = ()) -> dict[str, Any]:
     """The `message.created` envelope (contract lines 651-667)."""
 
     return {
         "type": _MESSAGE_CREATED,
         "conversation": _conversation_for(message),
-        "data": _full_data(message),
+        "data": _full_data(message, media=media),
     }
 
 
-def build_edited_event(message: Message) -> dict[str, Any]:
+def build_edited_event(message: Message, *, media: Sequence[Attachment] = ()) -> dict[str, Any]:
     """The `message.edited` envelope — same shape as created (contract line 669)."""
 
     return {
         "type": _MESSAGE_EDITED,
         "conversation": _conversation_for(message),
-        "data": _full_data(message),
+        "data": _full_data(message, media=media),
     }
 
 
@@ -162,16 +196,33 @@ async def publish_message_event(redis: Redis, event: dict[str, Any], *, topic: s
     )
 
 
-async def publish_message_created(redis: Redis, message: Message) -> None:
-    """Publish `message.created` for a just-committed row (persist-then-publish)."""
+async def publish_message_created(
+    redis: Redis, message: Message, *, media: Sequence[Attachment] = ()
+) -> None:
+    """Publish `message.created` for a just-committed row (persist-then-publish).
 
-    await publish_message_event(redis, build_created_event(message), topic=_topic_for(message))
+    `media` (T29) is the message's just-bound attachments — pass the same
+    list the send call bound in the same transaction so the WS payload
+    never lags the REST `message.media[]` response for the same send.
+    """
+
+    await publish_message_event(
+        redis, build_created_event(message, media=media), topic=_topic_for(message)
+    )
 
 
-async def publish_message_edited(redis: Redis, message: Message) -> None:
-    """Publish `message.edited` for a just-committed edit (persist-then-publish)."""
+async def publish_message_edited(
+    redis: Redis, message: Message, *, media: Sequence[Attachment] = ()
+) -> None:
+    """Publish `message.edited` for a just-committed edit (persist-then-publish).
 
-    await publish_message_event(redis, build_edited_event(message), topic=_topic_for(message))
+    `media` (T29) is the message's currently-bound attachments (unchanged
+    by an edit, but still part of the envelope's `data` shape).
+    """
+
+    await publish_message_event(
+        redis, build_edited_event(message, media=media), topic=_topic_for(message)
+    )
 
 
 async def publish_message_deleted(redis: Redis, message: Message) -> None:

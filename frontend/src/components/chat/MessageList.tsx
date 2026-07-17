@@ -3,11 +3,14 @@ import type { ConversationTarget } from '../../api/types';
 import { useAuth } from '../../hooks/useAuth';
 import { useChannelMembers } from '../../hooks/useChannelMembers';
 import { useMessageHistory } from '../../hooks/useMessageHistory';
+import type { WsStatus } from '../../ws/socketClient';
 import { AlertBanner } from '../ui/AlertBanner';
 import { Button } from '../ui/Button';
 import { ErrorBanner } from '../ErrorBanner';
 import { MessageComposer } from './MessageComposer';
 import { MessageTimeline } from './MessageTimeline';
+import { ReconnectingBanner } from './ReconnectingBanner';
+import { TypingIndicator } from './TypingIndicator';
 
 export interface MessageListProps {
   /** The channel to view/send in. DM support is out of this task's scope
@@ -15,6 +18,14 @@ export interface MessageListProps {
    * `useMessageHistory`/`messagesApi` are written generically over
    * `ConversationTarget` for that future reuse. */
   channelId: string;
+  /** Live presence/typing wiring (T34), owned by the caller
+   * (`usePresenceAndTyping`) so the same connection also drives the
+   * channel's member-list presence indicators — all optional so this
+   * component keeps working standalone (existing call sites/tests) without
+   * a live connection established. */
+  typingUserIds?: string[];
+  onTyping?: () => void;
+  wsStatus?: WsStatus;
 }
 
 function scrollToBottom(el: HTMLElement | null): void {
@@ -26,7 +37,12 @@ function scrollToBottom(el: HTMLElement | null): void {
 /** Ties together REST history/infinite-scroll, optimistic send, author
  * edit/delete, and identity lookup into the full channel messaging surface
  * (T32). Live WS delivery is explicitly out of scope here (T33). */
-export function MessageList({ channelId }: MessageListProps): JSX.Element {
+export function MessageList({
+  channelId,
+  typingUserIds = [],
+  onTyping,
+  wsStatus = 'closed',
+}: MessageListProps): JSX.Element {
   const { user } = useAuth();
   const currentUserId = user?.id ?? null;
 
@@ -95,6 +111,8 @@ export function MessageList({ channelId }: MessageListProps): JSX.Element {
 
   return (
     <div className="flex h-full flex-col gap-3">
+      <ReconnectingBanner status={wsStatus} />
+
       {membersError !== null && (
         <AlertBanner variant="warning" role="status">
           Could not load member details — messages will show sender ids instead of names until this is retried.
@@ -180,7 +198,9 @@ export function MessageList({ channelId }: MessageListProps): JSX.Element {
 
       {actionError !== null && <ErrorBanner error={actionError} />}
 
-      <MessageComposer onSend={sendMessage} disabled={isLoadingInitial} />
+      <TypingIndicator userIds={typingUserIds} members={membersById} />
+
+      <MessageComposer onSend={sendMessage} disabled={isLoadingInitial} onTyping={onTyping} />
     </div>
   );
 }
