@@ -97,7 +97,7 @@ class TestGetMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user, headers = await _authed(db_session, first_name="Alice", last_name="Ng")
 
@@ -123,7 +123,7 @@ class TestGetMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, headers = await _authed(db_session, is_system_admin=True)
 
@@ -140,7 +140,7 @@ class TestGetMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, headers = await _authed(db_session, avatar_url=None, first_name="Bo", last_name="Zed")
 
@@ -168,7 +168,7 @@ class TestPatchMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, headers = await _authed(db_session)
 
@@ -196,7 +196,7 @@ class TestPatchMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, headers = await _authed(db_session)
 
@@ -214,7 +214,7 @@ class TestPatchMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, headers = await _authed(
             db_session, first_name="Alice", last_name="Ng", avatar_url="https://old"
@@ -236,7 +236,7 @@ class TestPatchMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, headers = await _authed(db_session)
         payload = {"first_name": "Alice", "last_name": "Ng"}
@@ -256,7 +256,7 @@ class TestPatchMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, headers = await _authed(db_session)
 
@@ -275,7 +275,7 @@ class TestPatchMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, headers = await _authed(db_session)
 
@@ -292,7 +292,7 @@ class TestPatchMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user, headers = await _authed(db_session)
 
@@ -308,7 +308,7 @@ class TestPatchMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, headers = await _authed(db_session)
 
@@ -325,7 +325,7 @@ class TestPatchMe:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, headers = await _authed(db_session)
 
@@ -349,7 +349,7 @@ class TestPatchMe:
         """`/v1/me` is always self — there is no `user_id` path param to spoof."""
 
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         victim, _ = await _authed(db_session, first_name="Victim")
         _, attacker_headers = await _authed(db_session, first_name="Attacker")

@@ -98,7 +98,7 @@ class TestMetricsEndpointAuth:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.get("/v1/internal/metrics")
 
@@ -112,7 +112,7 @@ class TestMetricsEndpointAuth:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         bearer = await _member_token(db_session)
 
@@ -130,7 +130,7 @@ class TestMetricsEndpointShape:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         metrics_module.reset_metrics()
         bearer = await _admin_token(db_session)
@@ -151,7 +151,7 @@ class TestMetricsEndpointShape:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         bearer = await _admin_token(db_session)
 

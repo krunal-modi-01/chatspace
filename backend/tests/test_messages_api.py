@@ -809,9 +809,9 @@ class TestSendChannelMessageIdempotencyConcurrency:
         redis_available: bool,
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         from app.db.redis import dispose_redis_client, get_redis_client
         from app.services.messages import send_channel_message
@@ -893,9 +893,9 @@ class TestSendChannelMessageMediaBindConcurrency:
         redis_available: bool,
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         from app.db.redis import dispose_redis_client, get_redis_client
         from app.services.messages import InvalidMediaError, send_channel_message

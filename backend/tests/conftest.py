@@ -23,8 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # Fix: derive the test database name and Redis index from the worktree, so
 # each *linked* worktree gets its own isolated data layer while the main
 # checkout keeps the historical defaults (`chatspace_test`, Redis db 1).
-_PG_HOST, _PG_PORT, _PG_USER, _PG_PASS = "localhost", 5432, "postgres", "postgres"
-_REDIS_HOST, _REDIS_PORT = "localhost", 6379
+_PG_HOST, _PG_PORT, _PG_USER, _PG_PASS = "localhost", 5425, "postgres", "postgres"
+_REDIS_HOST, _REDIS_PORT = "localhost", 6380
 
 
 def _worktree_suffix() -> str | None:
@@ -113,7 +113,7 @@ def configured_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def _local_postgres_reachable() -> bool:
-    host, port = "localhost", 5432
+    host, port = "localhost", 5425
     try:
         with socket.create_connection((host, port), timeout=1):
             return True
@@ -276,7 +276,7 @@ def client(
 
     if not postgres_available:
         pytest.skip(
-            "local Postgres not reachable on localhost:5432 "
+            "local Postgres not reachable on localhost:5425 "
             "(required: T12 System Admin bootstrap runs at app startup)"
         )
 
@@ -315,7 +315,7 @@ def postgres_available() -> bool:
     still exercising the real driver wherever one is available.
     """
 
-    host, port = "localhost", 5432
+    host, port = "localhost", 5425
     try:
         with socket.create_connection((host, port), timeout=1):
             return True
@@ -391,7 +391,7 @@ def migrated_db(postgres_available: bool) -> Iterator[None]:
     """
 
     if not postgres_available:
-        pytest.skip("local Postgres not reachable on localhost:5432")
+        pytest.skip("local Postgres not reachable on localhost:5425")
 
     from alembic.config import Config
 
@@ -463,7 +463,7 @@ def redis_available() -> bool:
     client wherever a local Redis is available.
     """
 
-    host, port = "localhost", 6379
+    host, port = "localhost", 6380
     try:
         with socket.create_connection((host, port), timeout=1):
             return True

@@ -95,7 +95,7 @@ def _alembic_config() -> Config:
 @pytest.fixture
 async def async_engine(postgres_available: bool) -> AsyncIterator[AsyncEngine]:
     if not postgres_available:
-        pytest.skip("local Postgres not reachable on localhost:5432")
+        pytest.skip("local Postgres not reachable on localhost:5425")
 
     engine = create_async_engine(ASYNC_DATABASE_URL)
     yield engine
@@ -107,7 +107,7 @@ def migrated_db(postgres_available: bool) -> Iterator[Config]:
     """Run `upgrade head`; the enclosing test/module tears down explicitly."""
 
     if not postgres_available:
-        pytest.skip("local Postgres not reachable on localhost:5432")
+        pytest.skip("local Postgres not reachable on localhost:5425")
 
     cfg = _alembic_config()
     command.upgrade(cfg, "head")
@@ -303,7 +303,7 @@ class TestDowngradeBase:
         self, postgres_available: bool, async_engine: AsyncEngine
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
 
         cfg = _alembic_config()
         # `command.upgrade`/`downgrade` call `asyncio.run(...)` internally

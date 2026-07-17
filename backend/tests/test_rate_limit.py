@@ -45,7 +45,7 @@ _BASE_NOW = 1_700_000_000.0
 
 def _skip_unless_redis(redis_available: bool) -> None:
     if not redis_available:
-        pytest.skip("local Redis not reachable on localhost:6379")
+        pytest.skip("local Redis not reachable on localhost:6380")
 
 
 @pytest.fixture

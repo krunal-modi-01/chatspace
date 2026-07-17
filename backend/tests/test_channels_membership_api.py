@@ -1008,7 +1008,7 @@ class TestSoleAdminSuccessionConcurrency:
         postgres_available: bool,
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
 
         admin_a, _ = await _authed_user(db_session)
         admin_b, _ = await _authed_user(db_session)

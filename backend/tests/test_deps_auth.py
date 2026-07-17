@@ -125,7 +125,7 @@ class TestRequireAuthValid:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -161,7 +161,7 @@ class TestRequireAuthRevoked:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user, revoked=True)
@@ -184,7 +184,7 @@ class TestRequireAuthRevoked:
         """`DELETE .../sessions/{id}` busts the cache so revocation is immediate."""
 
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -213,7 +213,7 @@ class TestRequireAuthExpired:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user, expired=True)
@@ -235,7 +235,7 @@ class TestRequireAuthDeactivatedUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session, is_active=True)
         session = await _make_session(db_session, user)
@@ -266,7 +266,7 @@ class TestRequireAuthColdCacheFallback:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -315,7 +315,7 @@ class TestSessionsListAndRevokeEndpoints:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -337,7 +337,7 @@ class TestSessionsListAndRevokeEndpoints:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         owner = await _make_user(db_session)
         other = await _make_user(db_session)
@@ -361,7 +361,7 @@ class TestSessionsListAndRevokeEndpoints:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)

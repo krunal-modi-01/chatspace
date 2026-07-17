@@ -25,9 +25,9 @@ def test_readyz_returns_200_when_database_and_redis_reachable(
     """Both the database (T03) and Redis (T05) probes are real."""
 
     if not postgres_available:
-        pytest.skip("local Postgres not reachable on localhost:5432")
+        pytest.skip("local Postgres not reachable on localhost:5425")
     if not redis_available:
-        pytest.skip("local Redis not reachable on localhost:6379")
+        pytest.skip("local Redis not reachable on localhost:6380")
 
     response = client.get("/v1/readyz")
 

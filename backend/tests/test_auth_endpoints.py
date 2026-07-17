@@ -65,7 +65,7 @@ class TestLoginEndpoint:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         await db_session.commit()
@@ -90,7 +90,7 @@ class TestLoginEndpoint:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post(
             "/v1/auth/login",
@@ -108,7 +108,7 @@ class TestLoginEndpoint:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         await db_session.commit()
@@ -137,7 +137,7 @@ class TestLoginEndpoint:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session, is_active=False)
         await db_session.commit()
@@ -163,7 +163,7 @@ class TestLoginEndpoint:
         is not inert."""
 
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session, must_change_password=True)
         await db_session.commit()
@@ -195,7 +195,7 @@ class TestLoginEndpoint:
         not-yet-reset account, even with fully correct credentials."""
 
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session, must_change_password=True)
         await db_session.commit()
@@ -216,7 +216,7 @@ class TestLoginEndpoint:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post("/v1/auth/login", json={"email": "alice@example.com"})
 
@@ -227,7 +227,7 @@ class TestLoginEndpoint:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post(
             "/v1/auth/login",
@@ -247,7 +247,7 @@ class TestRefreshEndpoint:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         await db_session.commit()
@@ -276,7 +276,7 @@ class TestRefreshEndpoint:
         """F12: a revoked refresh token fails refresh with 401."""
 
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         await db_session.commit()
@@ -301,7 +301,7 @@ class TestRefreshEndpoint:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post(
             "/v1/auth/refresh", json={"refresh_token": "not-a-real-refresh-token"}
@@ -313,7 +313,7 @@ class TestRefreshEndpoint:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post("/v1/auth/refresh", json={})
 
@@ -331,7 +331,7 @@ class TestLogoutEndpoint:
         """F14: logout revokes only the current session, other sessions unaffected."""
 
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         await db_session.commit()
@@ -366,7 +366,7 @@ class TestLogoutEndpoint:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post("/v1/auth/logout")
 
@@ -381,7 +381,7 @@ class TestLogoutEndpoint:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         await db_session.commit()

@@ -145,7 +145,7 @@ class TestListUsers:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin, bearer = await _admin_token(db_session)
         await _make_user(db_session)
@@ -180,7 +180,7 @@ class TestListUsers:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, bearer = await _admin_token(db_session)
         target = await _make_user(
@@ -216,7 +216,7 @@ class TestListUsers:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, bearer = await _admin_token(db_session)
         inactive = await _make_user(db_session, is_active=False)
@@ -240,7 +240,7 @@ class TestListUsers:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -256,7 +256,7 @@ class TestListUsers:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.get("/v1/admin/users")
 
@@ -272,7 +272,7 @@ class TestDeactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, admin_bearer = await _admin_token(db_session)
         target = await _make_user(db_session)
@@ -310,7 +310,7 @@ class TestDeactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, admin_bearer = await _admin_token(db_session)
         sole_admin = await _make_user(db_session)
@@ -378,7 +378,7 @@ class TestDeactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin, bearer = await _admin_token(db_session)
         # The app-startup bootstrap admin (ADR-0009) is a second active
@@ -411,7 +411,7 @@ class TestDeactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, bearer_1 = await _admin_token(db_session)
         admin_2, bearer_2 = await _admin_token(db_session)
@@ -434,7 +434,7 @@ class TestDeactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, admin_bearer = await _admin_token(db_session)
         target = await _make_user(db_session, is_active=False)
@@ -457,7 +457,7 @@ class TestDeactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, bearer = await _admin_token(db_session)
 
@@ -477,7 +477,7 @@ class TestDeactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -501,7 +501,7 @@ class TestReactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, admin_bearer = await _admin_token(db_session)
         target = await _make_user(db_session)
@@ -543,7 +543,7 @@ class TestReactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, admin_bearer = await _admin_token(db_session)
         target = await _make_user(db_session)
@@ -566,7 +566,7 @@ class TestReactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         _, bearer = await _admin_token(db_session)
 
@@ -586,7 +586,7 @@ class TestReactivateUser:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -620,7 +620,7 @@ class TestLastAdminGuardConcurrency:
         postgres_available: bool,
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
 
         admin_a = await _make_user(db_session, is_system_admin=True)
         admin_b = await _make_user(db_session, is_system_admin=True)

@@ -145,7 +145,7 @@ def cors_configured_client(
     """
 
     if not postgres_available:
-        pytest.skip("local Postgres not reachable on localhost:5432")
+        pytest.skip("local Postgres not reachable on localhost:5425")
 
     from app.core.config import get_settings
     from app.db.redis import get_redis_client

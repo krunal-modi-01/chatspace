@@ -150,7 +150,7 @@ class TestPasswordResetRequest:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         await db_session.commit()
@@ -172,7 +172,7 @@ class TestPasswordResetRequest:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post("/v1/auth/password-reset", json={"email": "nobody-here@example.com"})
 
@@ -186,7 +186,7 @@ class TestPasswordResetRequest:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post("/v1/auth/password-reset", json={})
 
@@ -202,7 +202,7 @@ class TestPasswordResetRequest:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         fake_email_service.fail = True
         user = await _make_user(db_session)
@@ -226,7 +226,7 @@ class TestPasswordResetRequest:
         """F17: only the most recently issued reset token validates."""
 
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         await db_session.commit()
@@ -274,7 +274,7 @@ class TestPasswordResetRequest:
         """
 
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         await db_session.commit()
@@ -316,7 +316,7 @@ class TestPasswordResetConfirm:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         other_session = await _make_session(db_session, user)
@@ -349,7 +349,7 @@ class TestPasswordResetConfirm:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post(
             "/v1/auth/password-reset/confirm",
@@ -367,7 +367,7 @@ class TestPasswordResetConfirm:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         raw_value = "already-used-token"
@@ -389,7 +389,7 @@ class TestPasswordResetConfirm:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         raw_value = "expired-token"
@@ -411,7 +411,7 @@ class TestPasswordResetConfirm:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         raw_value = "policy-check-token"
@@ -437,7 +437,7 @@ class TestPasswordResetConfirm:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post("/v1/auth/password-reset/confirm", json={})
 
@@ -458,7 +458,7 @@ class TestPasswordResetConfirm:
         flag, so the account can then log in normally."""
 
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         user.must_change_password = True
@@ -499,7 +499,7 @@ class TestPasswordChange:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         initiating_session = await _make_session(db_session, user)
@@ -537,7 +537,7 @@ class TestPasswordChange:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -569,7 +569,7 @@ class TestPasswordChange:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -593,7 +593,7 @@ class TestPasswordChange:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -613,7 +613,7 @@ class TestPasswordChange:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post(
             "/v1/auth/password/change",
@@ -633,7 +633,7 @@ class TestPasswordChange:
         while `must_change_password` is set also clears the flag."""
 
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         user.must_change_password = True

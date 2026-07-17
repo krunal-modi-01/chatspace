@@ -201,7 +201,7 @@ async def redis_client(redis_available: bool):  # type: ignore[no-untyped-def]
     """
 
     if not redis_available:
-        pytest.skip("local Redis not reachable on localhost:6379")
+        pytest.skip("local Redis not reachable on localhost:6380")
 
     from redis.asyncio import Redis
 
