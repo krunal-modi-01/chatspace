@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { CurrentUser } from '../api/types';
+import { useMyChannelsStore } from './myChannelsStore';
 import { tokenStorage } from './tokenStorage';
 
 export interface AuthSession {
@@ -39,6 +40,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   clearSession: () => {
     tokenStorage.clear();
     set({ accessToken: null, refreshToken: null, user: null, isBootstrapping: false });
+    // `myChannelsStore` (T51) is a shared, module-scoped store that outlives
+    // component mount/unmount — it must be wiped on every session teardown
+    // (explicit logout, forced logout via WS `revoked`/`deactivated`, or a
+    // failed token refresh) so a subsequent login in the same tab (SPA
+    // navigation, no page reload) never briefly renders the previous
+    // account's private channel names/roles. `clearSession` is the single
+    // choke point all of those paths already go through.
+    useMyChannelsStore.getState().reset();
   },
 }));
 

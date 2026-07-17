@@ -41,6 +41,7 @@ from functools import lru_cache
 import aiosmtplib
 
 from app.core.config import Settings, get_settings
+from app.core.metrics import increment_counter
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +226,12 @@ class EmailService:
                     "exception_type": type(exc).__name__,
                 },
             )
+            # This is a real delivery failure (attempts=0, never reached
+            # the network) and must still count against the
+            # `email-send-failure-rate` alert's numerator (docs/observability
+            # /alerts.yaml) -- otherwise a CRLF/header-injection attempt in
+            # `to_email` is invisible to that SLI.
+            increment_counter("email_send_failure_total", message_type=message_type.value)
             raise EmailDeliveryError(message_type, attempts=0) from exc
 
         max_attempts = self._settings.smtp_max_attempts
@@ -265,6 +272,8 @@ class EmailService:
                     "email sent",
                     extra={"message_type": message_type.value, "attempt": attempt},
                 )
+                # Key metric (technical spec §9): "email send success/failure".
+                increment_counter("email_send_success_total", message_type=message_type.value)
                 return
 
         logger.error(
@@ -275,6 +284,7 @@ class EmailService:
                 "exception_type": type(last_exc).__name__ if last_exc else None,
             },
         )
+        increment_counter("email_send_failure_total", message_type=message_type.value)
         raise EmailDeliveryError(message_type, max_attempts) from last_exc
 
 

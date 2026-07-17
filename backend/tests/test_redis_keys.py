@@ -11,6 +11,7 @@ from app.core.redis_keys import (
     rate_limit_bucket_key,
     session_revocation_key,
     typing_indicator_key,
+    user_topic,
 )
 
 
@@ -62,6 +63,21 @@ class TestDmTopic:
         user_id = uuid4()
 
         assert dm_topic(user_id, user_id) == f"dm:{user_id}:{user_id}"
+
+
+class TestUserTopic:
+    """T49/ADR-0012: the per-user WS topic every connection auto-subscribes to."""
+
+    def test_produces_canonical_user_prefix(self) -> None:
+        user_id = uuid4()
+
+        assert user_topic(user_id) == f"user:{user_id}"
+
+    def test_accepts_plain_string_id(self) -> None:
+        assert user_topic("abc-123") == "user:abc-123"
+
+    def test_distinct_users_never_share_a_topic(self) -> None:
+        assert user_topic(uuid4()) != user_topic(uuid4())
 
 
 class TestPresenceKeys:
@@ -145,10 +161,11 @@ class TestCrossRoleNamespaceIsolation:
 
         keys = {
             channel_topic(shared_id),
+            user_topic(shared_id),
             presence_connection_count_key(shared_id),
             presence_state_key(shared_id),
             rate_limit_bucket_key(RateLimitScope.MESSAGE_SEND, str(shared_id)),
             session_revocation_key(shared_id),
         }
 
-        assert len(keys) == 5
+        assert len(keys) == 6

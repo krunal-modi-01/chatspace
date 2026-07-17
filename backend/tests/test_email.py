@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 
 import aiosmtplib
 import pytest
+from app.core.metrics import reset_metrics
+from app.core.metrics import snapshot as metrics_snapshot
 
 from app.core.config import Settings
 from app.services.email import (
@@ -19,8 +21,8 @@ from app.services.email import (
 
 def _build_settings(**overrides: object) -> Settings:
     defaults: dict[str, object] = {
-        "database_url": "postgresql+asyncpg://user:pass@localhost:5432/does-not-exist",
-        "redis_url": "redis://localhost:6379/1",
+        "database_url": "postgresql+asyncpg://user:pass@localhost:5425/does-not-exist",
+        "redis_url": "redis://localhost:6380/1",
         "jwt_signing_key": "test",
         "smtp_host": "localhost",
         "smtp_port": 1025,
@@ -117,6 +119,7 @@ class TestSendInviteEmail:
 
         monkeypatch.setattr("app.services.email.aiosmtplib.send", fake_send)
 
+        reset_metrics()
         await service.send_invite_email(
             to_email="invitee@example.com",
             invite_link="https://chatspace.example/invite/abc123token",
@@ -125,6 +128,11 @@ class TestSendInviteEmail:
 
         assert len(calls) == 1
         assert calls[0]["hostname"] == "localhost"
+
+        # Key metric (technical spec §9): "email send success/failure"
+        # (T39; code review finding 1).
+        counters = metrics_snapshot()["counters"]["email_send_success_total"]
+        assert counters["message_type=invite"] == 1
 
     async def test_raises_email_delivery_error_after_exhausting_bounded_retry(
         self, settings: Settings, monkeypatch: pytest.MonkeyPatch
@@ -138,6 +146,7 @@ class TestSendInviteEmail:
 
         monkeypatch.setattr("app.services.email.aiosmtplib.send", always_fail)
 
+        reset_metrics()
         with pytest.raises(EmailDeliveryError) as excinfo:
             await service.send_invite_email(
                 to_email="invitee@example.com",
@@ -148,6 +157,12 @@ class TestSendInviteEmail:
         assert len(attempts) == 3
         assert excinfo.value.message_type == EmailMessageType.INVITE
         assert excinfo.value.attempts == 3
+
+        # Key metric (technical spec §9): "email send success/failure",
+        # feeding the `email-send-failure-rate` alert (T39; code review
+        # finding 1).
+        counters = metrics_snapshot()["counters"]["email_send_failure_total"]
+        assert counters["message_type=invite"] == 1
 
     async def test_recovers_after_a_transient_failure_within_the_retry_budget(
         self, monkeypatch: pytest.MonkeyPatch
@@ -275,6 +290,26 @@ class TestMalformedRecipientFailsLoudWithTypedError:
                 invite_link="https://chatspace.example/invite/abc123token",
                 expires_at=datetime(2026, 7, 13, tzinfo=UTC),
             )
+
+    async def test_crlf_in_recipient_still_increments_failure_counter(
+        self, service: EmailService
+    ) -> None:
+        """The pre-network 'message construction failed' path (attempts=0)
+        is a real delivery failure and must still count against the
+        `email-send-failure-rate` alert's numerator (T39 code review
+        finding 1) -- not just the post-retry-exhaustion path.
+        """
+
+        reset_metrics()
+        with pytest.raises(EmailDeliveryError):
+            await service.send_invite_email(
+                to_email="attacker@example.com\r\nBcc: victim@example.com",
+                invite_link="https://chatspace.example/invite/abc123token",
+                expires_at=datetime(2026, 7, 13, tzinfo=UTC),
+            )
+
+        counters = metrics_snapshot()["counters"]["email_send_failure_total"]
+        assert counters["message_type=invite"] == 1
 
 
 class TestSendPasswordResetEmail:

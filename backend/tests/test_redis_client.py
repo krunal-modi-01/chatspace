@@ -42,7 +42,7 @@ def _build_settings(**overrides: object) -> Settings:
 
     defaults: dict[str, object] = {
         "database_url": "postgresql+asyncpg://user:pass@240.0.0.1:5432/does-not-exist",
-        "redis_url": "redis://localhost:6379/1",
+        "redis_url": "redis://localhost:6380/1",
         "jwt_signing_key": "test",
         "smtp_host": "localhost",
         "smtp_port": 1025,
@@ -114,7 +114,7 @@ class TestClientAgainstRealRedis:
         self, configured_env: None, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         client = get_redis_client()
         assert await client.ping() is True

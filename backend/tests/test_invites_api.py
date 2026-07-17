@@ -180,7 +180,7 @@ class TestIssueInvite:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         token = await _admin_token(db_session)
 
@@ -211,7 +211,7 @@ class TestIssueInvite:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         user = await _make_user(db_session)
         session = await _make_session(db_session, user)
@@ -230,7 +230,7 @@ class TestIssueInvite:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.post("/v1/invites", json={"email": "newbie@example.com"})
 
@@ -244,7 +244,7 @@ class TestIssueInvite:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         token = await _admin_token(db_session)
 
@@ -262,7 +262,7 @@ class TestIssueInvite:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         token = await _admin_token(db_session)
 
@@ -283,7 +283,7 @@ class TestIssueInvite:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         existing = await _make_user(db_session, email="already-here@example.com")
         token = await _admin_token(db_session)
@@ -306,7 +306,7 @@ class TestIssueInvite:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         fake_email_service.fail = True
         token = await _admin_token(db_session)
@@ -336,7 +336,7 @@ class TestIssueInvite:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         token = await _admin_token(db_session)
 
@@ -428,7 +428,7 @@ class TestResendInvite:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         admin_session = await _make_session(db_session, admin)
@@ -469,7 +469,7 @@ class TestResendInvite:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         invite = await _make_invite(db_session, admin, raw_token=_tok("some-token"))
@@ -492,7 +492,7 @@ class TestResendInvite:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         token = await _admin_token(db_session)
 
@@ -510,7 +510,7 @@ class TestResendInvite:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         admin_session = await _make_session(db_session, admin)
@@ -534,7 +534,7 @@ class TestResendInvite:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         admin_session = await _make_session(db_session, admin)
@@ -559,7 +559,7 @@ class TestResendInvite:
         fake_email_service: _FakeEmailService,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         admin_session = await _make_session(db_session, admin)
@@ -589,7 +589,7 @@ class TestRevokeInvite:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         admin_session = await _make_session(db_session, admin)
@@ -613,7 +613,7 @@ class TestRevokeInvite:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         admin_session = await _make_session(db_session, admin)
@@ -635,7 +635,7 @@ class TestRevokeInvite:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         admin_session = await _make_session(db_session, admin)
@@ -658,7 +658,7 @@ class TestRevokeInvite:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         invite = await _make_invite(db_session, admin, raw_token=_tok("no-touchy"))
@@ -679,7 +679,7 @@ class TestRevokeInvite:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         token = await _admin_token(db_session)
 
@@ -695,7 +695,7 @@ class TestRevokeInvite:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         invite = await _make_invite(db_session, admin, raw_token=_tok("unauth-delete"))
@@ -715,7 +715,7 @@ class TestListInvites:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         admin_session = await _make_session(db_session, admin)
@@ -744,7 +744,7 @@ class TestListInvites:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         admin_session = await _make_session(db_session, admin)
@@ -802,7 +802,7 @@ class TestListInvites:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         token = await _admin_token(db_session)
 
@@ -819,7 +819,7 @@ class TestListInvites:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         await _make_invite(db_session, admin, raw_token=_tok("hidden-from-non-admin"))
@@ -837,7 +837,7 @@ class TestListInvites:
         self, migrated_db: None, client: TestClient, redis_available: bool
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         response = client.get("/v1/invites")
 
@@ -851,7 +851,7 @@ class TestListInvites:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         token = await _admin_token(db_session)
 
@@ -870,7 +870,7 @@ class TestListInvites:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         token = await _admin_token(db_session)
 
@@ -889,7 +889,7 @@ class TestListInvites:
         redis_available: bool,
     ) -> None:
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         admin = await _make_user(db_session, is_system_admin=True)
         admin_session = await _make_session(db_session, admin)

@@ -35,6 +35,7 @@ from app.core.media_validation import (
     MediaSniffMismatchError,
     MediaTypeDisallowedError,
 )
+from app.core.metrics import increment_counter
 from app.core.rate_limit_deps import enforce_media_upload_rate_limit
 from app.db.session import get_db_session
 from app.db.storage import get_s3_client
@@ -122,26 +123,33 @@ async def upload_media_route(
             filename_raw=filename,
         )
     except InvalidMediaKindError:
+        increment_counter("media_upload_rejected_total", reason="invalid_kind")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_INVALID_KIND_DETAIL
         ) from None
     except MediaUploadEmptyError:
+        increment_counter("media_upload_rejected_total", reason="empty")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=_EMPTY_UPLOAD_DETAIL
         ) from None
     except MediaSizeExceededError:
+        increment_counter("media_upload_rejected_total", reason="size_exceeded")
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=_SIZE_EXCEEDED_DETAIL
         ) from None
     except (MediaTypeDisallowedError, MediaSniffMismatchError, MediaExifStripError):
+        increment_counter("media_upload_rejected_total", reason="unsupported_type")
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=_UNSUPPORTED_MEDIA_DETAIL
         ) from None
     except MediaStorageError:
+        increment_counter("media_upload_rejected_total", reason="storage_unavailable")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_STORAGE_UNAVAILABLE_DETAIL
         ) from None
 
+    # Key metric (technical spec §9): "media upload success/reject counts".
+    increment_counter("media_upload_success_total", kind=attachment.kind.value)
     logger.info(
         "media uploaded",
         extra={

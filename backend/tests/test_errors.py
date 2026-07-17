@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+
+from app.core.errors import _endpoint_class
 
 
 def test_404_returns_problem_json_shape(client: TestClient) -> None:
@@ -101,3 +104,51 @@ def test_password_policy_error_renders_as_422_problem_json(client: TestClient) -
     # only the policy-violation description.
     assert all("a1" != e.get("detail") for e in body["errors"])
     assert body["detail"] == "Password fails policy."
+
+
+def _make_request(*, path: str, route: object | None) -> Request:
+    scope: dict[str, object] = {
+        "type": "http",
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+        "method": "GET",
+        "scheme": "http",
+        "server": ("testserver", 80),
+    }
+    if route is not None:
+        scope["route"] = route
+    return Request(scope)  # type: ignore[arg-type]
+
+
+class _FakeRoute:
+    """Minimal stand-in for a Starlette `Route`/`APIRoute` -- only `.path` matters."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+
+
+def test_endpoint_class_prefers_the_matched_route_template_over_the_raw_path() -> None:
+    """T39 code review finding 4: a metric label must never carry a raw,
+    caller-supplied id/value -- only the fixed route template, when a route
+    matched at all."""
+
+    request = _make_request(
+        path="/v1/channels/01998f2e-abcd-7000-8000-000000000000/messages",
+        route=_FakeRoute("/v1/channels/{channel_id}/messages"),
+    )
+
+    assert _endpoint_class(request) == "/v1/channels/{channel_id}/messages"
+
+
+def test_endpoint_class_falls_back_to_raw_path_only_when_no_route_matched() -> None:
+    """The raw-path fallback is documented as unreachable for the two call
+    sites that actually use this label today (`rate_limit_exceeded_handler`
+    and `unhandled_exception_handler` only ever fire on an already-matched
+    route) -- pinned here so a future call site cannot silently start
+    leaking a raw, potentially caller-influenced path into the metrics
+    registry without at least this invariant being visible and tested."""
+
+    request = _make_request(path="/v1/totally-unmatched-path", route=None)
+
+    assert _endpoint_class(request) == "/v1/totally-unmatched-path"

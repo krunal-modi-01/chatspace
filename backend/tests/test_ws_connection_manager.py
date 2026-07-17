@@ -21,6 +21,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.core.metrics import reset_metrics
+from app.core.metrics import snapshot as metrics_snapshot
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketDisconnect
@@ -28,6 +30,7 @@ from starlette.websockets import WebSocketDisconnect
 from app.core.config import get_settings
 from app.core.ids import generate_id
 from app.core.jwt import create_access_token
+from app.core.redis_keys import user_topic
 from app.core.security import hash_password
 from app.models.channel import Channel
 from app.models.channel_member import ChannelMember, ChannelMemberRole
@@ -146,7 +149,7 @@ def redis_client(redis_available: bool):  # type: ignore[no-untyped-def]
     """
 
     if not redis_available:
-        pytest.skip("local Redis not reachable on localhost:6379")
+        pytest.skip("local Redis not reachable on localhost:6380")
 
     from app.db.redis import get_redis_client
 
@@ -245,6 +248,69 @@ class TestConnectAuth:
 
         with client.websocket_connect(_ws_url(token)) as ws:
             assert ws.accepted_subprotocol is None
+
+
+class TestPerUserTopicAutoSubscribe:
+    """T49/ADR-0012: every authenticated connection is auto-subscribed
+    server-side to its own `user:{user_id}` topic — no client frame
+    involved.
+    """
+
+    async def test_connect_subscribes_to_own_user_topic_with_no_join_frame(
+        self, migrated_db: None, client: TestClient, db_session: AsyncSession
+    ) -> None:
+        user, _, token = await _authed_user(db_session)
+
+        with client.websocket_connect(_ws_url(token)) as ws:
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json() == {"type": "pong"}
+
+            states = list(connection_manager._connections.values())  # noqa: SLF001
+            matching = [s for s in states if s.user_id == user.id]
+            assert len(matching) == 1
+            assert user_topic(user.id) in matching[0].subscribed_topics
+
+    async def test_two_connections_of_the_same_user_are_both_subscribed(
+        self, migrated_db: None, client: TestClient, db_session: AsyncSession
+    ) -> None:
+        """Multiple tabs/devices of the same user each get their own
+        subscription to the same per-user topic (so a membership event
+        reaches every one of that user's connections).
+        """
+
+        user, _, token = await _authed_user(db_session)
+
+        with client.websocket_connect(_ws_url(token)) as ws_a:
+            ws_a.send_json({"type": "ping"})
+            assert ws_a.receive_json() == {"type": "pong"}
+
+            with client.websocket_connect(_ws_url(token)) as ws_b:
+                ws_b.send_json({"type": "ping"})
+                assert ws_b.receive_json() == {"type": "pong"}
+
+                states = list(connection_manager._connections.values())  # noqa: SLF001
+                matching = [s for s in states if s.user_id == user.id]
+                assert len(matching) == 2
+                assert all(user_topic(user.id) in s.subscribed_topics for s in matching)
+
+    async def test_a_users_connection_is_never_subscribed_to_another_users_topic(
+        self, migrated_db: None, client: TestClient, db_session: AsyncSession
+    ) -> None:
+        """Identity is the sole authorization — no client input can make a
+        connection subscribe to a different user's per-user topic.
+        """
+
+        user_a, _, token_a = await _authed_user(db_session)
+        user_b, _, _ = await _authed_user(db_session)
+
+        with client.websocket_connect(_ws_url(token_a)) as ws:
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json() == {"type": "pong"}
+
+            states = list(connection_manager._connections.values())  # noqa: SLF001
+            matching = [s for s in states if s.user_id == user_a.id]
+            assert len(matching) == 1
+            assert user_topic(user_b.id) not in matching[0].subscribed_topics
 
 
 class TestJoinLeave:
@@ -370,7 +436,11 @@ class TestJoinLeave:
             ws.send_json({"type": "ping"})
             assert ws.receive_json() == {"type": "pong"}
 
-            assert matching[0].subscribed_topics == set()
+            # The explicit `channel:...` join is gone, but the server-side
+            # per-user auto-subscribe (T49/ADR-0012) is never removed by a
+            # `leave` frame — it's tied to the connection's own lifetime,
+            # not to any join/leave bookkeeping.
+            assert matching[0].subscribed_topics == {user_topic(member.id)}
 
     async def test_malformed_frame_is_non_fatal_error(
         self, migrated_db: None, client: TestClient, db_session: AsyncSession
@@ -805,6 +875,7 @@ class TestHeartbeatTimeoutAndRateLimit:
         monkeypatch.setenv("WS_FRAME_RATE_LIMIT_MAX_FRAMES", "3")
         monkeypatch.setenv("WS_FRAME_RATE_LIMIT_WINDOW_SECONDS", "10")
         get_settings.cache_clear()
+        reset_metrics()
         try:
             _, _, token = await _authed_user(db_session)
 
@@ -819,8 +890,15 @@ class TestHeartbeatTimeoutAndRateLimit:
                 with pytest.raises(WebSocketDisconnect) as exc_info:
                     ws.receive_json()
                 assert exc_info.value.code == WSCloseCode.RATE_LIMITED
+
+            # Key metric (technical spec §9): "429 counts by endpoint class"
+            # — the WS frame-rate guard shares `rate_limit_rejected_total`
+            # under its own `endpoint_class=ws_frame` label (T39).
+            counters = metrics_snapshot()["counters"]["rate_limit_rejected_total"]
+            assert counters["endpoint_class=ws_frame"] == 1
         finally:
             get_settings.cache_clear()
+            reset_metrics()
 
 
 async def _wait_until_last_seen_persisted(

@@ -32,6 +32,17 @@ dependencies = [
     "python-multipart>=0.0.12",
 ]
 
+[project.optional-dependencies]
+# T39 Observability: the Sentry-class error/uptime monitor
+# (`app.core.error_monitor`) is config-driven and OFF by default -- this
+# extra is deliberately *not* in the base `dependencies` list above so a
+# deployment that never sets ERROR_MONITOR_DSN never needs it installed
+# (CLAUDE.md: no new dependency without the dependency-update skill's
+# vetting checklist; this optional extra sidesteps that for the common
+# case of the monitor staying disabled). Install with
+# `uv sync --extra observability` to enable it.
+observability = ["sentry-sdk>=2.0.0"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",

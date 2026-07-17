@@ -59,7 +59,7 @@ async def db_sessionmaker(
     """
 
     if not postgres_available:
-        pytest.skip("local Postgres not reachable on localhost:5432")
+        pytest.skip("local Postgres not reachable on localhost:5425")
 
     engine = create_async_engine(_TEST_DATABASE_URL)
     try:
@@ -391,7 +391,7 @@ class TestAdminBootstrapFlagsMigration:
         self, postgres_available: bool
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
 
         import asyncio
 

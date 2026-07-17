@@ -25,7 +25,7 @@ services:
       # Bind to loopback only: these carry the app's real DB with PII and use
       # fixed local-dev credentials. Publishing on 0.0.0.0 would expose them to
       # the whole LAN. Local tooling still reaches them on 127.0.0.1.
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5425:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -41,7 +41,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:6380:6379"
     volumes:
       - redis_data:/data
     healthcheck:

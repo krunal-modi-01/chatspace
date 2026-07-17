@@ -26,11 +26,16 @@ T19 (membership mutation, F31-F37):
 
 - `POST /v1/channels/{channel_id}/join`: join a public channel directly
   (F31); idempotent; `403` if private, uniform `404` if it doesn't exist.
+  After commit, on an actual (non-idempotent-replay) join, publishes
+  `channel.member_added` to the caller's own `user:{user_id}` topic (F74,
+  ADR-0012, T49).
 - `POST /v1/channels/{channel_id}/leave`: leave a channel the caller
   belongs to; sole-admin succession runs first (F35/F36); never `409`
   (leaving is always allowed, even into the F37 zero-admin terminal
   state). Idempotent: a repeat/no-op leave by a non-member, and an
-  absent channel, both return `204`.
+  absent channel, both return `204`. After commit, on an actual leave,
+  publishes `channel.member_removed` to the caller's own `user:{user_id}`
+  topic (F75, ADR-0012, T49).
 - `GET /v1/channels/{channel_id}/members`: offset-paginated member list;
   caller must be a member. Privacy decides the non-member status: a
   private channel the caller doesn't belong to is a uniform `404`
@@ -39,13 +44,27 @@ T19 (membership mutation, F31-F37):
   discoverable).
 - `POST /v1/channels/{channel_id}/members`: an admin adds a member
   (F32/F33); the only way into a private channel; `409` if the channel is
-  in the F37 zero-admin frozen state.
+  in the F37 zero-admin frozen state. After commit, on an actual add,
+  publishes `channel.member_added` to the **added user's** own
+  `user:{user_id}` topic (F74, ADR-0012, T49) — not the calling admin's.
 - `PATCH /v1/channels/{channel_id}/members/{user_id}`: an admin changes a
   member's role (F33); idempotent no-op if unchanged; `409` if frozen.
+  Deliberately emits no WS event (frozen contract, Open Question 5) — a
+  role change is out of T49's scope.
 - `DELETE /v1/channels/{channel_id}/members/{user_id}`: an admin removes
   a member (F33); sole-admin succession runs first if the target is the
   channel's only admin; idempotent (`204`) if the target isn't currently a
-  member; `409` if frozen.
+  member; `409` if frozen. After commit, on an actual removal, publishes
+  `channel.member_removed` to the **removed user's** own `user:{user_id}`
+  topic (F75, ADR-0012, T49) — not the calling admin's.
+
+T49's four publish points above are strictly persist-then-publish: they
+only ever fire after `db.commit()` has returned, only on the branch that
+actually mutated a `channel_members` row (never on an idempotent
+no-op/replay), and always via `app.services.channel_events`'s fail-open
+helper (ADR-0004) — a Redis outage never fails the mutation itself, it
+only loses the live event (the client recovers by refetching `GET
+/v1/channels` on reconnect, per the contract's no-replay note).
 
 Every body is parsed via `app.core.request_body.parse_body` (not a typed
 FastAPI body parameter) so a malformed body maps to the contract's `400`
@@ -71,6 +90,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import AuthenticatedUser, require_auth
 from app.core.pagination import PaginationError, decode_cursor, resolve_limit
 from app.core.request_body import openapi_request_body, parse_body
+from app.db.redis import get_redis_client
 from app.db.session import get_db_session
 from app.models.channel import Channel
 from app.models.channel_member import ChannelMemberRole
@@ -88,6 +108,7 @@ from app.schemas.channels import (
     PublicChannelItem,
     PublicChannelListResponse,
 )
+from app.services.channel_events import publish_member_added, publish_member_removed
 from app.services.channels import (
     CHANNEL_MEMBERS_DEFAULT_LIMIT,
     CHANNEL_MEMBERS_MAX_LIMIT,
@@ -398,6 +419,27 @@ async def join_channel_route(
             extra={"channel_id": str(channel_id), "user_id": str(current.user_id)},
         )
 
+        # T49/ADR-0012: persist-then-publish, and only for the actual
+        # (non-idempotent-replay) join — an `ALREADY_MEMBER` outcome
+        # committed nothing new, so it must never publish. `channel` and
+        # `member_count` were already computed pre-commit by
+        # `join_public_channel` (in the same transaction as the insert) —
+        # deliberately *not* re-queried here after `db.commit()`, so a
+        # transient DB error post-commit can no longer turn an
+        # already-durable join into a silently dropped event. Only the
+        # `redis.publish()` call itself is fail-open (ADR-0004).
+        assert result.channel is not None
+        assert result.member_count is not None
+        redis = get_redis_client()
+        await publish_member_added(
+            redis,
+            result.channel,
+            user_id=current.user_id,
+            role=result.membership.role,
+            joined_at=result.membership.joined_at,
+            member_count=result.member_count,
+        )
+
     return MembershipResponse.from_membership(result.membership)
 
 
@@ -422,6 +464,13 @@ async def leave_channel_route(channel_id: UUID, current: _CurrentUser, db: _DbSe
         "channel left",
         extra={"channel_id": str(channel_id), "user_id": str(current.user_id)},
     )
+
+    # T49/ADR-0012: persist-then-publish. The `NOT_MEMBER` idempotent-noop
+    # outcome already returned above before this commit, so reaching here
+    # always means an actual membership row was just removed. Fails open
+    # on its own (never raises) on a Redis outage.
+    redis = get_redis_client()
+    await publish_member_removed(redis, channel_id=channel_id, user_id=current.user_id)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -512,6 +561,27 @@ async def add_channel_member_route(
             },
         )
 
+        # T49/ADR-0012: persist-then-publish, to the *added* user's own
+        # topic — never the calling admin's. `ALREADY_MEMBER` committed
+        # nothing new, so it must never publish. `channel` and
+        # `member_count` were already computed pre-commit by
+        # `add_channel_member` (in the same transaction as the insert) —
+        # deliberately *not* re-queried here after `db.commit()`, so a
+        # transient DB error post-commit can no longer turn an
+        # already-durable add into a silently dropped event. Only the
+        # `redis.publish()` call itself is fail-open (ADR-0004).
+        assert result.channel is not None
+        assert result.member_count is not None
+        redis = get_redis_client()
+        await publish_member_added(
+            redis,
+            result.channel,
+            user_id=body.user_id,
+            role=result.membership.role,
+            joined_at=result.membership.joined_at,
+            member_count=result.member_count,
+        )
+
     return MembershipResponse.from_membership(result.membership)
 
 
@@ -594,5 +664,12 @@ async def remove_channel_member_route(
                 "removed_by": str(current.user_id),
             },
         )
+
+        # T49/ADR-0012: persist-then-publish, to the *removed* user's own
+        # topic — never the calling admin's. `NOT_MEMBER` committed
+        # nothing new, so it must never publish. Fails open on its own
+        # (never raises) on a Redis outage.
+        redis = get_redis_client()
+        await publish_member_removed(redis, channel_id=channel_id, user_id=user_id)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

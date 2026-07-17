@@ -29,6 +29,7 @@ from uuid import UUID
 from starlette.websockets import WebSocket, WebSocketState
 
 from app.core.ids import generate_id
+from app.core.metrics import set_gauge
 from app.ws.close_codes import WSCloseCode
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,10 @@ class ConnectionManager:
             session_id=session_id,
         )
         self._connections[state.connection_id] = state
+        # Key metric (technical spec §9): "active WebSocket connections (per
+        # instance + total)" -- per-instance here; an external dashboard
+        # sums across the 1-2 running instances for the "total" view.
+        set_gauge("ws_active_connections", len(self._connections))
         logger.info(
             "ws connection registered",
             extra={
@@ -80,6 +85,7 @@ class ConnectionManager:
         """Drop a connection and every subscription bookkeeping entry for it."""
 
         self._connections.pop(state.connection_id, None)
+        set_gauge("ws_active_connections", len(self._connections))
         logger.info(
             "ws connection unregistered",
             extra={

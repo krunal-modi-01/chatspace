@@ -1,13 +1,25 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChannelPage } from './ChannelPage';
 import * as channelsApi from '../../api/channelsApi';
 import { ApiError } from '../../api/problem';
 import { useAuthStore } from '../../store/authStore';
+import { useMyChannelsStore } from '../../store/myChannelsStore';
 
 vi.mock('../../api/channelsApi');
+
+// `usePresenceAndTyping` opens a real `/v1/ws` connection when unmocked —
+// none of these tests exercise presence/typing (see `ChannelPage.presence.test.tsx`
+// for that coverage), so it is stubbed out here the same way `useConversationSocket.test.tsx`
+// stubs `ReconnectingSocket` directly. `vi.hoisted` is required (not a bare
+// module-scope `const`) because `vi.mock` factories run before this file's
+// own top-level statements, per vitest's hoisting semantics.
+const { usePresenceAndTypingMock } = vi.hoisted(() => ({ usePresenceAndTypingMock: vi.fn() }));
+vi.mock('../../hooks/usePresenceAndTyping', () => ({
+  usePresenceAndTyping: () => usePresenceAndTypingMock(),
+}));
 
 const CURRENT_USER = {
   id: 'user-1',
@@ -55,8 +67,29 @@ function renderAt(path = '/channels/chan-1') {
 
 describe('ChannelPage', () => {
   afterEach(() => {
+    // Explicit `cleanup()` *before* resetting mocks (rather than relying on
+    // `@testing-library/react`'s own auto-registered `afterEach`, which — by
+    // hook-nesting order — runs *after* this describe-scoped `afterEach`):
+    // a still-in-flight async update from a test that didn't `await` every
+    // effect to settle (e.g. a mutation's refetch) can otherwise fire a
+    // re-render against an already-`resetAllMocks()`-cleared
+    // `usePresenceAndTypingMock` (default `vi.fn()` return of `undefined`)
+    // while the component is still mounted, crashing the destructure in
+    // `ChannelPage.tsx`. Unmounting first removes that window entirely.
+    cleanup();
     vi.resetAllMocks();
     useAuthStore.setState({ user: null });
+    useMyChannelsStore.setState({ viewedChannelId: null, removedChannelId: null });
+  });
+
+  beforeEach(() => {
+    usePresenceAndTypingMock.mockReturnValue({
+      status: 'closed',
+      typingUserIds: [],
+      presenceByUserId: new Map(),
+      sendTyping: vi.fn(),
+      fatalError: null,
+    });
   });
 
   it('shows a not-found error when the channel 404s (private/non-existent, uniform)', async () => {
@@ -493,5 +526,45 @@ describe('ChannelPage', () => {
     });
     expect(await screen.findByText('@alice')).toBeInTheDocument();
     expect(screen.queryByText('No members found.')).not.toBeInTheDocument();
+  });
+
+  it('exits gracefully with a specific message when a live event removes the currently open channel (F75, Flow L 4a)', async () => {
+    useAuthStore.setState({ user: CURRENT_USER });
+    vi.mocked(channelsApi.getChannel).mockResolvedValue({
+      id: 'chan-1',
+      name: 'engineering',
+      is_private: false,
+      created_by: 'user-1',
+      created_at: '2026-07-01T00:00:00.000Z',
+      member_count: 2,
+      my_role: 'member',
+    });
+    vi.mocked(channelsApi.listChannelMembers).mockResolvedValue({
+      items: [ADMIN_MEMBER, OTHER_MEMBER],
+      total: 2,
+    });
+
+    const user = userEvent.setup();
+    renderAt();
+
+    expect(await screen.findByRole('heading', { name: 'engineering' })).toBeInTheDocument();
+    // The removal notice can only ever apply while this exact channel is
+    // registered as "currently viewed" — confirms the mount-time handoff to
+    // the shared store this screen relies on (`useChannelRemovalNotice`).
+    expect(useMyChannelsStore.getState().viewedChannelId).toBe('chan-1');
+
+    // Simulates the app-level `useChannelMembershipSocket` applying a live
+    // `channel.member_removed` event for the channel currently open.
+    act(() => {
+      useMyChannelsStore.getState().removeChannel('chan-1');
+    });
+
+    expect(await screen.findByText('You were removed from this channel')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'engineering' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /back to channels/i }));
+
+    expect(await screen.findByText('Channels list page')).toBeInTheDocument();
+    expect(useMyChannelsStore.getState().removedChannelId).toBeNull();
   });
 });

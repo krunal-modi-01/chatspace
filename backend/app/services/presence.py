@@ -104,6 +104,7 @@ from redis.asyncio import Redis
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.metrics import increment_counter
 from app.core.redis_fail_modes import redis_fail_open
 from app.core.redis_keys import presence_connection_count_key, presence_topic
 from app.models.user import User
@@ -255,6 +256,10 @@ async def handle_connect(redis: Redis, *, user_id: UUID, ttl_seconds: int) -> No
     if count == 1:
         event = build_presence_event(user_id=user_id, state=_STATE_ONLINE, last_seen=None)
         await _publish(redis, event, user_id=user_id)
+        # Key metric (technical spec §9): "presence gauge" -- an
+        # online/offline *transition* counter (content-free: no user_id
+        # label) an external dashboard can derive a live gauge from.
+        increment_counter("presence_transitions_total", state=_STATE_ONLINE)
         logger.info("presence: user online", extra={"user_id": str(user_id)})
 
 
@@ -316,4 +321,5 @@ async def handle_disconnect(redis: Redis, db: AsyncSession, *, user_id: UUID) ->
 
     event = build_presence_event(user_id=user_id, state=_STATE_OFFLINE, last_seen=last_seen)
     await _publish(redis, event, user_id=user_id)
+    increment_counter("presence_transitions_total", state=_STATE_OFFLINE)
     logger.info("presence: user offline; last_seen persisted", extra={"user_id": str(user_id)})

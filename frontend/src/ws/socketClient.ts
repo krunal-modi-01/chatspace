@@ -1,7 +1,14 @@
 import { ApiError } from '../api/problem';
 import type { ConversationTarget } from '../api/types';
 import { classifyCloseCode } from './closeCodes';
-import { buildJoinFrame, buildLeaveFrame, buildPingFrame, conversationTopicKey, parseServerFrame } from './frames';
+import {
+  buildJoinFrame,
+  buildLeaveFrame,
+  buildPingFrame,
+  buildTypingFrame,
+  conversationTopicKey,
+  parseServerFrame,
+} from './frames';
 import type { ServerFrame } from './frames';
 
 /** `WebSocket.readyState` values, hand-rolled (not read off the global
@@ -145,6 +152,15 @@ export class ReconnectingSocket {
   leave(conversation: ConversationTarget): void {
     this.joined.delete(conversationTopicKey(conversation));
     this.send(buildLeaveFrame(conversation));
+  }
+
+  /** Sends a `typing` frame for `conversation` (T34, F56) — fire-and-forget,
+   * like `leave`: if the socket isn't currently open the frame is simply
+   * dropped (no send queue), which is correct here since typing is
+   * explicitly ephemeral/relay-only with no durable history to catch up on
+   * (unlike `join`, there is nothing to re-send on the next reconnect). */
+  sendTyping(conversation: ConversationTarget): void {
+    this.send(buildTypingFrame(conversation));
   }
 
   /** Client-initiated clean close (e.g. navigating away) — no reconnect. */

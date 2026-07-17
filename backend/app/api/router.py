@@ -28,7 +28,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import admin, auth, channels, health, invites, me, media, messages, password, sessions
+from app.api import (
+    admin,
+    auth,
+    channels,
+    health,
+    invites,
+    me,
+    media,
+    messages,
+    metrics,
+    password,
+    sessions,
+)
 
 api_router = APIRouter(prefix="/v1")
 api_router.include_router(health.router)
@@ -41,3 +53,4 @@ api_router.include_router(channels.router)
 api_router.include_router(messages.router)  # T21 channels/messages + T22 dms/messages
 api_router.include_router(media.router)  # T28 media upload + presigned fetch
 api_router.include_router(admin.router)
+api_router.include_router(metrics.router)  # T39 operator-only observability snapshot

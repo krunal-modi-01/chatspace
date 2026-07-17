@@ -24,7 +24,7 @@ import pytest
 from starlette.websockets import WebSocketState
 
 from app.core.ids import generate_id
-from app.core.redis_keys import channel_topic, dm_topic, presence_topic
+from app.core.redis_keys import channel_topic, dm_topic, presence_topic, user_topic
 from app.services.message_events import build_created_event
 from app.ws.connection_manager import ConnectionManager
 from app.ws.fanout import PubSubRelay, _typing_typer_id
@@ -172,7 +172,7 @@ def redis_client(redis_available: bool):  # type: ignore[no-untyped-def]
     """
 
     if not redis_available:
-        pytest.skip("local Redis not reachable on localhost:6379")
+        pytest.skip("local Redis not reachable on localhost:6380")
 
     from app.db.redis import get_redis_client
 
@@ -337,6 +337,82 @@ class TestPubSubRelayCrossInstance:
         finally:
             await relay.stop()
 
+    async def test_member_added_event_published_on_user_topic_reaches_a_subscriber_relay(
+        self, redis_client: Any
+    ) -> None:
+        """T49/ADR-0012: `PubSubRelay` must actually subscribe to `user:*` —
+        otherwise every `channel.member_added`/`channel.member_removed`
+        event is silently dropped by Redis (no matching subscriber) and
+        never reaches any connected client, mirroring the T25 presence
+        regression this test file already guards against.
+        """
+
+        manager = ConnectionManager()
+        ws = _FakeWebSocket()
+        state = _register(manager, ws)
+        user_id = uuid4()
+        topic = user_topic(user_id)
+        manager.subscribe(state, topic)
+
+        relay = PubSubRelay(redis_client, manager=manager)
+        await relay.start()
+        try:
+            event = {
+                "type": "channel.member_added",
+                "conversation": {"kind": "channel", "channel_id": str(uuid4())},
+                "data": {
+                    "channel": {
+                        "id": str(uuid4()),
+                        "name": "engineering",
+                        "is_private": False,
+                        "created_by": str(uuid4()),
+                        "created_at": "2026-07-02T14:31:07.482000+00:00",
+                        "member_count": 2,
+                    },
+                    "user_id": str(user_id),
+                    "role": "member",
+                    "joined_at": "2026-07-03T09:00:00+00:00",
+                },
+            }
+            await redis_client.publish(topic, json.dumps(event))
+
+            await _wait_until(lambda: len(ws.received) == 1)
+            assert ws.received[0]["type"] == "channel.member_added"
+            assert ws.received[0]["data"]["user_id"] == str(user_id)
+        finally:
+            await relay.stop()
+
+    async def test_only_the_subscribed_users_own_connection_receives_the_event(
+        self, redis_client: Any
+    ) -> None:
+        """Privacy: an event published on one user's `user:{id}` topic must
+        never reach a connection subscribed to a *different* user's topic
+        — delivery is per-user, never per-channel (F74/F75 isolation).
+        """
+
+        manager = ConnectionManager()
+        ws_target = _FakeWebSocket()
+        ws_other = _FakeWebSocket()
+        target_user_id = uuid4()
+        other_user_id = uuid4()
+        manager.subscribe(_register(manager, ws_target), user_topic(target_user_id))
+        manager.subscribe(_register(manager, ws_other), user_topic(other_user_id))
+
+        relay = PubSubRelay(redis_client, manager=manager)
+        await relay.start()
+        try:
+            event = {
+                "type": "channel.member_removed",
+                "conversation": {"kind": "channel", "channel_id": str(uuid4())},
+                "data": {"channel_id": str(uuid4()), "user_id": str(target_user_id)},
+            }
+            await redis_client.publish(user_topic(target_user_id), json.dumps(event))
+
+            await _wait_until(lambda: len(ws_target.received) == 1)
+            assert ws_other.received == []
+        finally:
+            await relay.stop()
+
     async def test_non_json_payload_on_topic_is_dropped_not_raised(self, redis_client: Any) -> None:
         """A malformed payload on a subscribed topic must not crash the relay
         or the test — it's dropped, and the relay keeps relaying
@@ -444,6 +520,75 @@ class TestTypingTyperId:
         assert _typing_typer_id({"type": "typing", "data": {}}) is None
         assert _typing_typer_id({"type": "typing", "data": {"user_id": 123}}) is None
         assert _typing_typer_id({"type": "typing", "data": {"user_id": "not-a-uuid"}}) is None
+
+
+class TestDeliveryLagMs:
+    """Unit tests for `app.ws.fanout._delivery_lag_ms` (T39 delivery-lag SLI)."""
+
+    def test_computes_a_non_negative_lag_for_message_created(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from app.ws.fanout import _delivery_lag_ms
+
+        created_at = (datetime.now(UTC) - timedelta(milliseconds=250)).isoformat()
+        payload = {"type": "message.created", "data": {"created_at": created_at}}
+
+        lag_ms = _delivery_lag_ms(payload)
+
+        assert lag_ms is not None
+        assert lag_ms >= 200  # allow scheduling jitter, comfortably below the 250ms floor
+
+    def test_returns_none_for_non_created_event_types(self) -> None:
+        from app.ws.fanout import _delivery_lag_ms
+
+        assert _delivery_lag_ms({"type": "message.edited", "data": {"created_at": "x"}}) is None
+        assert _delivery_lag_ms({"type": "presence", "data": {}}) is None
+
+    def test_returns_none_when_created_at_is_missing_or_malformed(self) -> None:
+        from app.ws.fanout import _delivery_lag_ms
+
+        assert _delivery_lag_ms({"type": "message.created", "data": {}}) is None
+        assert _delivery_lag_ms({"type": "message.created"}) is None
+        assert (
+            _delivery_lag_ms({"type": "message.created", "data": {"created_at": "not-a-date"}})
+            is None
+        )
+
+    def test_naive_datetime_is_treated_as_utc(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from app.ws.fanout import _delivery_lag_ms
+
+        naive = (datetime.now(UTC) - timedelta(milliseconds=100)).replace(tzinfo=None)
+        payload = {"type": "message.created", "data": {"created_at": naive.isoformat()}}
+
+        lag_ms = _delivery_lag_ms(payload)
+
+        assert lag_ms is not None
+        assert lag_ms >= 0
+
+    async def test_relaying_a_message_created_event_observes_the_histogram(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from app.core import metrics as metrics_module
+        from app.ws.fanout import PubSubRelay
+
+        metrics_module.reset_metrics()
+        manager = ConnectionManager()
+        relay = PubSubRelay(object(), manager=manager)  # type: ignore[arg-type]
+
+        created_at = (datetime.now(UTC) - timedelta(milliseconds=10)).isoformat()
+        payload = {
+            "type": "message.created",
+            "conversation": {"kind": "channel", "channel_id": str(uuid4())},
+            "data": {"created_at": created_at},
+        }
+        message = {"channel": "chan:x", "data": json.dumps(payload)}
+
+        await relay._handle_message(message)
+
+        stats = metrics_module.snapshot()["histograms"]["message_delivery_lag_ms"]["_total"]
+        assert stats["count"] == 1
 
 
 class _FlakyPubSub:

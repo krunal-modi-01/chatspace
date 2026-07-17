@@ -16,6 +16,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.core.metrics import reset_metrics
+from app.core.metrics import snapshot as metrics_snapshot
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -150,6 +152,7 @@ class TestSendChannelMessage:
         channel = await _make_channel(db_session, creator=sender)
         await db_session.commit()
 
+        reset_metrics()
         response = client.post(
             f"/v1/channels/{channel.id}/messages",
             headers={**_auth_header(token), "Idempotency-Key": _idem_key()},
@@ -166,6 +169,13 @@ class TestSendChannelMessage:
         assert body["edited_at"] is None
         assert body["deleted_at"] is None
         uuid.UUID(body["id"])  # app-generated UUIDv7, well-formed
+
+        # Key metric (technical spec §9): "message send throughput" —
+        # a first-time (non-replay) channel send increments the
+        # `message_send_success_total{conversation_kind=channel,replay=false}`
+        # counter (T39; code review finding 1/2).
+        counters = metrics_snapshot()["counters"]["message_send_success_total"]
+        assert counters["conversation_kind=channel,replay=false"] == 1
 
     async def test_missing_idempotency_key_is_400(
         self, migrated_db: None, client: TestClient, db_session: AsyncSession
@@ -205,6 +215,7 @@ class TestSendChannelMessage:
         channel = await _make_channel(db_session, creator=sender)
         await db_session.commit()
 
+        reset_metrics()
         key = _idem_key()
         first = client.post(
             f"/v1/channels/{channel.id}/messages",
@@ -229,6 +240,14 @@ class TestSendChannelMessage:
         )
         assert count == 1
 
+        # Code review finding 2: an idempotent replay must not be counted
+        # as real throughput -- the first send is `replay=false`, the
+        # replay is `replay=true`, and they are tracked as distinct label
+        # combinations so a throughput reader can exclude replays.
+        counters = metrics_snapshot()["counters"]["message_send_success_total"]
+        assert counters["conversation_kind=channel,replay=false"] == 1
+        assert counters["conversation_kind=channel,replay=true"] == 1
+
     async def test_non_member_is_403(
         self, migrated_db: None, client: TestClient, db_session: AsyncSession
     ) -> None:
@@ -237,6 +256,7 @@ class TestSendChannelMessage:
         _, outsider_token = await _authed_user(db_session)
         await db_session.commit()
 
+        reset_metrics()
         response = client.post(
             f"/v1/channels/{channel.id}/messages",
             headers={**_auth_header(outsider_token), "Idempotency-Key": _idem_key()},
@@ -245,6 +265,13 @@ class TestSendChannelMessage:
 
         assert response.status_code == 403
         assert response.headers["content-type"] == "application/problem+json"
+
+        # Key metric (technical spec §9): "message send error rate" —
+        # the not-a-member business-rule rejection increments
+        # `message_send_error_total{conversation_kind=channel,error_type=not_member}`
+        # (T39; code review finding 1).
+        counters = metrics_snapshot()["counters"]["message_send_error_total"]
+        assert counters["conversation_kind=channel,error_type=not_member"] == 1
 
     async def test_missing_channel_is_404(
         self, migrated_db: None, client: TestClient, db_session: AsyncSession
@@ -782,9 +809,9 @@ class TestSendChannelMessageIdempotencyConcurrency:
         redis_available: bool,
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         from app.db.redis import dispose_redis_client, get_redis_client
         from app.services.messages import send_channel_message
@@ -866,9 +893,9 @@ class TestSendChannelMessageMediaBindConcurrency:
         redis_available: bool,
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
         if not redis_available:
-            pytest.skip("local Redis not reachable on localhost:6379")
+            pytest.skip("local Redis not reachable on localhost:6380")
 
         from app.db.redis import dispose_redis_client, get_redis_client
         from app.services.messages import InvalidMediaError, send_channel_message

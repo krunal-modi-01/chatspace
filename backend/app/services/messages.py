@@ -600,8 +600,10 @@ async def _claim_and_persist_message(
             # Fan-out only after the commit above has returned (T24,
             # persist-then-publish); fails open on its own (never raises),
             # so a Redis outage here cannot turn a successful send into an
-            # error response.
-            await publish_message_created(redis, message)
+            # error response. `media=bound_media` (T29): the WS payload
+            # carries exactly the attachments this send just bound, same
+            # as the REST response's `message.media[]`.
+            await publish_message_created(redis, message, media=bound_media)
 
             return SendMessageResult(message=message, media=bound_media, created=True)
 
@@ -960,8 +962,12 @@ async def edit_message(
 
     if changed:
         # Persist-then-publish (T24): fires only after the commit above
-        # has returned; fails open on its own (never raises).
-        await publish_message_edited(redis, message)
+        # has returned; fails open on its own (never raises). `media`
+        # (T29): an edit never changes bound attachments, but the WS
+        # envelope's `data.media[]` must still reflect them, not a
+        # hardcoded empty array.
+        media = await get_message_media(db, message_id)
+        await publish_message_edited(redis, message, media=media)
 
     return message
 

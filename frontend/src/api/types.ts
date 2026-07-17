@@ -171,6 +171,37 @@ export interface ListMessagesParams {
 }
 
 // ---------------------------------------------------------------------------
+// Media (T35) — two-phase upload/fetch (`POST /v1/media`, `GET
+// /v1/media/{media_id}/url`). Attach on send via `SendMessageRequest.media_ids`
+// below; render/download via `MessageMedia` (already defined above).
+// ---------------------------------------------------------------------------
+
+/** `kind` is an open enum server-side (`image`/`file`/`video` today) —
+ * clients must tolerate unknown values. */
+export type MediaKind = 'image' | 'file' | 'video' | (string & {});
+
+/** `201` body of `POST /v1/media` (multipart upload, phase 1). */
+export interface MediaUploadResponse {
+  media_id: string;
+  kind: MediaKind;
+  content_type: string;
+  filename: string;
+  size: number;
+  created_at: string;
+}
+
+/** `200` body of `GET /v1/media/{media_id}/url` — a fresh, short-lived (5
+ * min) presigned GET URL, issued at fetch time and never cached/persisted
+ * beyond the current render. */
+export interface MediaUrlResponse {
+  url: string;
+  expires_at: string;
+  content_type: string;
+  filename: string;
+  size: number;
+}
+
+// ---------------------------------------------------------------------------
 // Channels & membership (T31) — create/browse/join/leave + admin membership
 // management. Messages are out of scope here (T32).
 // ---------------------------------------------------------------------------
@@ -250,6 +281,26 @@ export interface ListChannelMembersParams {
 export interface ChannelMemberListResponse {
   items: ChannelMember[];
   total: number;
+}
+
+/** One entry of `GET /v1/channels`'s `items` — every channel (public and
+ * private) the caller is a member of; backs the "My Channels" navigation
+ * list (T50, F73). Unlike `PublicChannelSummary`, `is_private` may be
+ * `true` here, and `my_role` is always present (never `null` — every row is
+ * necessarily a membership). */
+export interface MyChannelSummary {
+  id: string;
+  name: string;
+  is_private: boolean;
+  created_by: string;
+  created_at: string;
+  member_count: number;
+  my_role: ChannelRole;
+}
+
+export interface ListMyChannelsParams {
+  limit?: number;
+  cursor?: string;
 }
 
 export interface AddChannelMemberRequest {

@@ -57,7 +57,7 @@ def _build_settings(**overrides: object) -> Settings:
 
     defaults: dict[str, object] = {
         "database_url": "postgresql+asyncpg://user:pass@240.0.0.1:5432/does-not-exist",
-        "redis_url": "redis://localhost:6379/1",
+        "redis_url": "redis://localhost:6380/1",
         "jwt_signing_key": "test",
         "smtp_host": "localhost",
         "smtp_port": 1025,
@@ -120,7 +120,7 @@ class TestGetDbSessionDependency:
         self, configured_env: None, postgres_available: bool
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
 
         session_gen = get_db_session()
         session = await anext(session_gen)
@@ -138,7 +138,7 @@ class TestGetDbSessionDependency:
         self, configured_env: None, postgres_available: bool
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
 
         session_gen = get_db_session()
         session = await anext(session_gen)
@@ -155,7 +155,7 @@ class TestCheckDatabaseProbe:
         self, configured_env: None, postgres_available: bool
     ) -> None:
         if not postgres_available:
-            pytest.skip("local Postgres not reachable on localhost:5432")
+            pytest.skip("local Postgres not reachable on localhost:5425")
 
         check = await check_database()
 

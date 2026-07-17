@@ -5,6 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { useAuthStore } from './store/authStore';
 
+// This suite exercises routing/nav, not the live WS listener (T51) —
+// stubbed out so `AppShell` doesn't open a real WebSocket connection in
+// jsdom; `useChannelMembershipSocket.test.tsx` covers that hook directly.
+vi.mock('./hooks/useChannelMembershipSocket', () => ({
+  useChannelMembershipSocket: vi.fn(),
+}));
+
 // Non-secret fixture — never a real credential.
 const FIXTURE_ACCESS = ['fixture', 'access'].join('-');
 const FIXTURE_REFRESH = ['fixture', 'refresh'].join('-');

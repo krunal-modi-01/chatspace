@@ -23,8 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # Fix: derive the test database name and Redis index from the worktree, so
 # each *linked* worktree gets its own isolated data layer while the main
 # checkout keeps the historical defaults (`chatspace_test`, Redis db 1).
-_PG_HOST, _PG_PORT, _PG_USER, _PG_PASS = "localhost", 5432, "postgres", "postgres"
-_REDIS_HOST, _REDIS_PORT = "localhost", 6379
+_PG_HOST, _PG_PORT, _PG_USER, _PG_PASS = "localhost", 5425, "postgres", "postgres"
+_REDIS_HOST, _REDIS_PORT = "localhost", 6380
 
 
 def _worktree_suffix() -> str | None:
@@ -113,7 +113,7 @@ def configured_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def _local_postgres_reachable() -> bool:
-    host, port = "localhost", 5432
+    host, port = "localhost", 5425
     try:
         with socket.create_connection((host, port), timeout=1):
             return True
@@ -276,7 +276,7 @@ def client(
 
     if not postgres_available:
         pytest.skip(
-            "local Postgres not reachable on localhost:5432 "
+            "local Postgres not reachable on localhost:5425 "
             "(required: T12 System Admin bootstrap runs at app startup)"
         )
 
@@ -315,7 +315,7 @@ def postgres_available() -> bool:
     still exercising the real driver wherever one is available.
     """
 
-    host, port = "localhost", 5432
+    host, port = "localhost", 5425
     try:
         with socket.create_connection((host, port), timeout=1):
             return True
@@ -391,7 +391,7 @@ def migrated_db(postgres_available: bool) -> Iterator[None]:
     """
 
     if not postgres_available:
-        pytest.skip("local Postgres not reachable on localhost:5432")
+        pytest.skip("local Postgres not reachable on localhost:5425")
 
     from alembic.config import Config
 
@@ -431,6 +431,28 @@ async def db_session(migrated_db: None) -> AsyncIterator[AsyncSession]:
     await engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _reset_metrics_registry() -> None:
+    """Reset `app.core.metrics`'s process-wide counter/gauge registry before every test.
+
+    T39 code review finding 2: about a dozen tests manually call
+    `reset_metrics()` at the point each happens to need it. That works
+    today only because there's no `pytest-randomly`/`xdist` reordering
+    configured (`pyproject.toml` has no such plugin) and every existing
+    manual call happens to be placed correctly. A new test that forgets
+    the manual reset -- or future adoption of parallel/randomized test
+    execution -- would otherwise produce order-dependent flakes on
+    exact-count assertions (`== 1`). This autouse fixture makes a clean
+    registry the default for every test; existing manual `reset_metrics()`
+    calls mid-test remain harmless (a reset of an already-empty registry).
+    """
+
+    from app.core.metrics import reset_metrics
+
+    reset_metrics()
+    yield
+
+
 @pytest.fixture(scope="session")
 def redis_available() -> bool:
     """Probe once per test session whether the local test Redis is up.
@@ -441,7 +463,7 @@ def redis_available() -> bool:
     client wherever a local Redis is available.
     """
 
-    host, port = "localhost", 6379
+    host, port = "localhost", 6380
     try:
         with socket.create_connection((host, port), timeout=1):
             return True

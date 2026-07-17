@@ -26,6 +26,8 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from app.core.metrics import reset_metrics
+from app.core.metrics import snapshot as metrics_snapshot
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,7 +51,7 @@ _TTL_SECONDS = 120
 
 def _skip_unless_redis(redis_available: bool) -> None:
     if not redis_available:
-        pytest.skip("local Redis not reachable on localhost:6379")
+        pytest.skip("local Redis not reachable on localhost:6380")
 
 
 @pytest.fixture
@@ -190,6 +192,7 @@ class TestRefCounting:
         topic = presence_topic(user_id)
         pubsub = redis_client.pubsub()
         await pubsub.subscribe(topic)
+        reset_metrics()
         try:
             await pubsub.get_message(timeout=1)  # subscribe confirmation
 
@@ -203,6 +206,12 @@ class TestRefCounting:
             await handle_connect(redis_client, user_id=user_id, ttl_seconds=_TTL_SECONDS)
             second = await pubsub.get_message(timeout=1)
             assert second is None
+
+            # Key metric (technical spec §9): "presence gauge" — exactly
+            # one online transition recorded, matching the single `online`
+            # event above (T39; code review finding 1).
+            counters = metrics_snapshot()["counters"]["presence_transitions_total"]
+            assert counters["state=online"] == 1
         finally:
             await pubsub.unsubscribe(topic)
             await pubsub.aclose()
@@ -220,6 +229,7 @@ class TestRefCounting:
     ) -> None:
         user = await _make_user(db_session)
 
+        reset_metrics()
         # Two concurrent connections (e.g. two tabs) for the same user.
         await handle_connect(redis_client, user_id=user.id, ttl_seconds=_TTL_SECONDS)
         await handle_connect(redis_client, user_id=user.id, ttl_seconds=_TTL_SECONDS)
@@ -236,6 +246,12 @@ class TestRefCounting:
         assert await is_online(redis_client, user.id) is False
         await db_session.refresh(user)
         assert user.last_seen is not None
+
+        # Key metric (technical spec §9): "presence gauge" — exactly one
+        # offline transition recorded, only on the last disconnect (T39;
+        # code review finding 1).
+        counters = metrics_snapshot()["counters"]["presence_transitions_total"]
+        assert counters["state=offline"] == 1
 
     async def test_ttl_is_set_on_connect(self, redis_client: Redis) -> None:
         user_id = uuid4()

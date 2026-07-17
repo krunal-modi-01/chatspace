@@ -2,6 +2,7 @@ import { useState, type JSX } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { MessageList } from '../../components/chat/MessageList';
+import { PresenceIndicator } from '../../components/chat/PresenceIndicator';
 import { AlertBanner } from '../../components/ui/AlertBanner';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
@@ -9,8 +10,11 @@ import { FormField } from '../../components/ui/FormField';
 import { Select } from '../../components/ui/Select';
 import { useAuth } from '../../hooks/useAuth';
 import { useChannelDetail } from '../../hooks/useChannelDetail';
+import { useChannelRemovalNotice } from '../../hooks/useChannelRemovalNotice';
+import { usePresenceAndTyping } from '../../hooks/usePresenceAndTyping';
 import { ApiError } from '../../api/problem';
-import type { ChannelMember, ChannelRole } from '../../api/types';
+import type { ChannelMember, ChannelRole, ConversationTarget } from '../../api/types';
+import type { PresenceState } from '../../ws/presenceStore';
 
 /** Maps the zero-admin-frozen 409 to the spec's exact affordance copy;
  * falls back to the generic `ErrorBanner` for anything else. */
@@ -48,6 +52,7 @@ function MemberRow({
   isCallerAdmin,
   isFrozen,
   isBusy,
+  presence,
   pendingSelfAction,
   onRequestRoleChange,
   onRequestRemove,
@@ -59,6 +64,7 @@ function MemberRow({
   isCallerAdmin: boolean;
   isFrozen: boolean;
   isBusy: boolean;
+  presence: PresenceState | undefined;
   pendingSelfAction: PendingSelfAction | null;
   onRequestRoleChange: (userId: string, role: ChannelRole) => void;
   onRequestRemove: (userId: string) => void;
@@ -73,6 +79,7 @@ function MemberRow({
         {member.first_name} {member.last_name}
         {isSelf && <span className="ml-1 text-caption text-[var(--color-text-tertiary)]">(you)</span>}
         <div className="text-caption text-[var(--color-text-tertiary)]">@{member.username}</div>
+        <PresenceIndicator presence={presence} />
       </td>
       <td className="px-4 py-3">
         {isCallerAdmin ? (
@@ -153,6 +160,7 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
   const { user } = useAuth();
   const [isConfirmingLeave, setIsConfirmingLeave] = useState(false);
   const [pendingSelfAction, setPendingSelfAction] = useState<PendingSelfAction | null>(null);
+  const { wasRemoved, dismiss: dismissRemovalNotice } = useChannelRemovalNotice(channelId);
 
   const {
     channel,
@@ -188,6 +196,45 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
     nextMembersPage,
     previousMembersPage,
   } = useChannelDetail(channelId);
+
+  // Computed defensively against a possibly-still-loading/null `channel`
+  // (must be called unconditionally, before the early returns below, per
+  // the Rules of Hooks) — only an actual member is authorized to join this
+  // conversation's WS topic (`authorize_conversation`, backend), so this
+  // stays `null` (no connection attempted) until membership is confirmed.
+  const conversationTarget: ConversationTarget | null =
+    channel !== null && channel.my_role !== null ? { kind: 'channel', channel_id: channelId } : null;
+  const {
+    status: wsStatus,
+    typingUserIds,
+    presenceByUserId,
+    sendTyping,
+  } = usePresenceAndTyping(conversationTarget);
+
+  // Live `channel.member_removed` for the channel currently open (F75, Flow
+  // L step 4a) — takes priority over every other state below since the
+  // caller's membership (and therefore the rest of this view) is gone.
+  if (wasRemoved) {
+    return (
+      <div className="max-w-3xl space-y-4">
+        <AlertBanner variant="warning" title="You were removed from this channel">
+          You no longer have access to this channel&apos;s messages or members. If this was a mistake, ask a channel
+          admin to re-add you.
+        </AlertBanner>
+        <Button
+          type="button"
+          variant="secondary"
+          className="w-auto"
+          onClick={() => {
+            dismissRemovalNotice();
+            navigate('/channels');
+          }}
+        >
+          Back to channels
+        </Button>
+      </div>
+    );
+  }
 
   if (isLoadingChannel) {
     return (
@@ -384,6 +431,7 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
                         isCallerAdmin={isCallerAdmin}
                         isFrozen={isFrozen}
                         isBusy={actionUserId === member.user_id}
+                        presence={presenceByUserId.get(member.user_id)}
                         pendingSelfAction={member.user_id === user?.id ? pendingSelfAction : null}
                         onRequestRoleChange={handleRequestRoleChange}
                         onRequestRemove={handleRequestRemove}
@@ -483,7 +531,12 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
         <Card className="flex h-[32rem] flex-col">
           <h2 className="text-subheading text-[var(--color-text-primary)]">Messages</h2>
           <div className="mt-4 flex-1 overflow-hidden">
-            <MessageList channelId={channelId} />
+            <MessageList
+              channelId={channelId}
+              typingUserIds={typingUserIds}
+              onTyping={sendTyping}
+              wsStatus={wsStatus}
+            />
           </div>
         </Card>
       )}
