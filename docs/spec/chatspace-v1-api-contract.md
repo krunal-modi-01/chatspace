@@ -2,7 +2,7 @@
 
 > Owner: `api-reviewer` (+ `backend-engineer`). Guarded by `api-change-guard` hook. Source of truth: the OpenAPI/proto/GraphQL file; this doc is the human-readable companion.
 
-**Status: Draft** · Version: `1.1.0` · Base path: `/v1` · Traces to: [`chatspace-v1-functional-spec.md`](chatspace-v1-functional-spec.md) (F1–F75), [`chatspace-v1-technical-spec.md`](chatspace-v1-technical-spec.md) §5 · ADRs: [0002](../../architecture/adr/0002-dm-data-model.md) · [0003](../../architecture/adr/0003-cursor-pagination.md) · [0004](../../architecture/adr/0004-realtime-delivery-fanout.md) · [0005](../../architecture/adr/0005-message-id-scheme.md) · [0006](../../architecture/adr/0006-revocable-sessions.md) · [0007](../../architecture/adr/0007-media-object-storage.md) · [0012](../../architecture/adr/0012-per-user-websocket-topic.md)
+**Status: Draft** · Version: `1.2.0` · Base path: `/v1` · Traces to: [`chatspace-v1-functional-spec.md`](chatspace-v1-functional-spec.md) (F1–F76), [`chatspace-v1-technical-spec.md`](chatspace-v1-technical-spec.md) §5 · ADRs: [0002](../../architecture/adr/0002-dm-data-model.md) · [0003](../../architecture/adr/0003-cursor-pagination.md) · [0004](../../architecture/adr/0004-realtime-delivery-fanout.md) · [0005](../../architecture/adr/0005-message-id-scheme.md) · [0006](../../architecture/adr/0006-revocable-sessions.md) · [0007](../../architecture/adr/0007-media-object-storage.md) · [0012](../../architecture/adr/0012-per-user-websocket-topic.md) · [0016](../../architecture/adr/0016-workspace-user-directory.md)
 
 ## Overview
 
@@ -11,7 +11,7 @@ This contract defines the complete v1 surface for **chatspace**, a single-worksp
 - **Purpose:** the promise made to every current and future consumer (React SPA today; future clients) of the chatspace backend. It covers authentication & sessions, invites, profile, channels & membership, channel messages, 1:1 DMs, media, workspace admin, and the real-time WebSocket surface.
 - **Style:** hybrid — **REST (JSON)** for all CRUD, history, auth, invites, admin, and media control-plane; **WebSocket (WSS)** for real-time only (new message / edit / delete, typing, presence, membership lifecycle). This split is mandated by `CLAUDE.md` conventions and TSD §5.
 - **Base path:** all REST routes are under `/v1`; the WebSocket endpoint is `/v1/ws`.
-- **Version:** `1.1.0`. The URI major version (`/v1`) is the compatibility boundary.
+- **Version:** `1.2.0`. The URI major version (`/v1`) is the compatibility boundary.
 
 All request/response bodies use **snake_case** JSON (matches Python/Pydantic). All timestamps are **ISO-8601 UTC** (e.g. `2026-07-02T14:31:07.482Z`); clients render local/relative time. Password hashes, JWT signing material, refresh-token internals, invite tokens, and reset tokens are **never** returned in list/read responses and **never** logged.
 
@@ -615,6 +615,21 @@ All request/response bodies use **snake_case** JSON (matches Python/Pydantic). A
   | 403 | Caller not a current member/participant of the parent conversation (F59) | problem+json |
   | 404 | No such media, or unassociated/orphaned (uniform) | problem+json |
 
+### `GET /v1/users/search`
+- **Purpose:** Scoped workspace user-directory search backing the channel member-picker (F32/F33) and the DM "new message" picker (F46, ADR-0017). Returns **minimal public identity only**. Deliberately distinct from `GET /v1/admin/users` (F72), which is System-Admin-only and returns account fields. Added in v1.2.0 per R59/F76, ADR-0016.
+- **Auth / scope:** Bearer; **any active user** (not admin-gated). Rate-limited as a general authenticated read.
+- **Idempotent:** Yes (safe read; each call returns current directory matches).
+- **Request:** _(query: `?q=<str>&limit=50&cursor=<opaque|null>`)_ — `q` matches `username`/`first_name`/`last_name`, case-insensitive, min length 1.
+```json
+{}
+```
+- **Responses:**
+  | Status | Meaning | Body |
+  |--------|---------|------|
+  | 200 | Directory page (empty list is a non-error result) | `{ items: [ { id, username, first_name, last_name, avatar_url } ], next_cursor }` — **never `email`, `is_active`, `last_seen`, or `role`** (R59/ADR-0016); deactivated users excluded by default |
+  | 400 | Missing/invalid `q`/`limit`/`cursor` | problem+json |
+  | 401 | Auth | problem+json |
+
 ### `GET /v1/admin/users`
 - **Purpose:** Cursor-paginated, searchable list of workspace users — active **and** deactivated — backing the User Management screen (F72, PRD §11). `q` matches name/username/email, case-insensitive. Added post-M8 to document shipped T44 behavior.
 - **Auth / scope:** Bearer; **`system_admin`** only.
@@ -732,7 +747,7 @@ Events fan out across instances via Redis pub/sub (F53). Ordering across the fan
 
 ## Open questions
 
-1. **Avatar upload path.** `PATCH /v1/me` accepts `avatar_url`, and `POST /v1/media` handles image hygiene (EXIF-strip, sniff). It is not fixed whether an avatar must be uploaded via `POST /v1/media` first (then its served URL supplied) or whether an external URL is permitted. Recommendation: route avatars through `POST /v1/media` for consistent hygiene; confirm with backend-engineer/security-reviewer. Non-blocking; does not change the wire contract shape.
+1. **Avatar upload path.** ✅ **Resolved (PRD v4 §11).** Avatars are uploaded via `POST /v1/media` (EXIF-stripped and content-sniffed like any image, R31/R53); the resulting served URL is then supplied to `PATCH /v1/me`. Pasting an arbitrary external URL is **retired** in the UI (the profile screen offers upload, not a raw-URL field). `PATCH /v1/me` still accepts `avatar_url` on the wire — its value is expected to be a media-pipeline URL — so this does not change the wire contract shape, only how the client obtains the value.
 2. **Refresh-token transport.** This contract returns `refresh_token` in the login/refresh JSON body. A hardened alternative is an httpOnly, Secure, SameSite cookie to keep it out of JS reach. This is a security-owner decision (pair with `security-reviewer`); flagged because switching later is a client-visible change.
 3. **`502` for email-delivery failure on invite issuance.** F1/ADR-0010 require failing loudly to the admin when SMTP is unreachable. `502 Bad Gateway` is used here to distinguish an upstream email-provider failure from a client error; confirm the status choice with the API owner (an alternative is `503`).
 4. **Message-history `limit` maximum (100).** ADR-0003 defers the exact max page size to this contract; 100 is proposed. Confirm against load-test findings (`performance-engineer`) before GA.

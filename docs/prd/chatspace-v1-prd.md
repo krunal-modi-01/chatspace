@@ -1,7 +1,17 @@
 # PRD — chatspace v1 (Final)
 
 > Owner: `product-manager` agent (+ human PM approval). Downstream: `business-analyst`, `architect`.
-> Status: Approved · Ticket: <link> · Last updated: 2026-07-13 · Version: 3
+> Status: Approved · Ticket: <link> · Last updated: 2026-07-20 · Version: 4
+
+> **v4 revision note (2026-07-20).** Following a UX/design review, added **R58** (navigation &
+> information architecture — the app-shell nav model plus a no-orphan-routes requirement, closing a
+> gap where the primary navigation surface was left to an implementation task, T50) and **R59**
+> (workspace user directory — a scoped user-search read enabling channel-member and DM selection
+> without exposing admin-only fields), with matching §5c and §6 entries and §11 updates. Resolved two
+> §12 open items: member-selection UX (was "enter a raw user id") and the direct-message frontend
+> surface (v1-scoped but never built in the M0–M9 plan). Introduced the design documentation set under
+> `docs/design/` plus an expanded `architecture/design-tokens.md`, and new ADR-0013–0017. No capability
+> is removed; R59 is additive and the DM data model (ADR-0002) is unchanged.
 
 > **v3 revision note.** Added **R56** (list own channels — the "My channels" list) and **R57**
 > (live membership propagation over WebSocket), with matching acceptance criteria (§6), a §5a
@@ -296,6 +306,8 @@ with the product mostly through its operational and security guarantees.
 | R55 | **List/search users (admin)** — a System Admin can retrieve a paginated, searchable list of users (id, first/last name, username, email, role, `is_active`, `last_seen`); search matches name/username/email; backs the User Management screen (§11) | Must (new) | System-Admin only (non-admin → `403`). **Password hash never returned** (§8). Pagination per §5b; includes both active and deactivated users. |
 | R56 | **List own channels ("My channels")** — an authenticated, active user can retrieve a paginated list of every channel (public **and** private) they are a member of, with name, visibility, member count, and their own role; backs the primary logged-in navigation surface (§11) | Must (new) | Complements R49, which excludes own memberships. Cursor pagination per §5b (ADR-0003). Served by the existing `ix_channel_members_user` index — no schema change. |
 | R57 | **Live membership propagation** — when a user is added to or removed from a channel (self join/leave or channel-admin add/remove), all of that user's connected clients receive a WebSocket event and update their channel list without a refresh | Must (new) | Same transport/fan-out family as R15/R17/R52, delivered on a per-user topic (ADR-0012). Deactivation-triggered removal excluded (connections are dropped per R16/R47); role-only changes emit no event (list self-heals on next fetch) — see FS F74/F75. |
+| R58 | **Navigation & information architecture** — a persistent primary navigation surface (the R56 "My channels" list) within an app shell where every role-appropriate destination is reachable by click (no orphan routes), collapsing to a drawer on small viewports | Must (new) | Realized per ADR-0014; detailed in `docs/design/INFORMATION_ARCHITECTURE.md`. Closes the gap where nav placement was left to task T50. Testable: no screen reachable only by URL; the System Admin User Management screen (R55) is reachable from nav. |
+| R59 | **Workspace user directory (member & DM selection)** — an authenticated, active user can search the workspace directory (matching name/username), returning **minimal public identity only** (id, username, first/last name, avatar), to add members to a channel (R6) and to start a DM (R12) | Must (new) | ADR-0016. **Distinct from R55** (admin list): returns no email/`is_active`/`last_seen`/`role`. Serves the channel member-picker and the DM "new message" picker; replaces add-by-raw-user-id. Cursor pagination §5b; rate-limited; deactivated users excluded from picker results by default. |
 
 ### §5a — Configurable limits (defaults; confirm/tune during design — not open product questions)
 
@@ -349,6 +361,7 @@ with the product mostly through its operational and security guarantees.
 | Add/remove members, set roles (own channel) | — | — | ❌ | ❌ | ✅ | — | — |
 | Edit a message | — | — | ❌ | ❌ | ❌ | ✅ (own) | ❌ |
 | Soft-delete a message | — | — | ❌ | ❌ | ❌ | ✅ (own only) | ❌ |
+| Search the workspace user directory (member/DM picker) | ❌ | — | ✅ | ✅ | ✅ | — | ✅ |
 | Send/read DM with a user | — | — | ✅² | ✅² | ✅² | — | ✅² |
 
 ¹ Leaving as the sole admin triggers auto-succession (R51) before membership is removed.
@@ -387,6 +400,13 @@ with the product mostly through its operational and security guarantees.
 - Given a user with an open WebSocket connection, When they are removed from a channel (self leave or admin remove), Then the channel disappears from their channel list live, and any open view of that channel is exited gracefully.
 - Given membership events were missed while a client was disconnected, When the client reconnects, Then it refetches the channel list and shows the correct memberships (no event replay is provided).
 - Given a membership change affecting user A, Then no other user's connection receives the membership event.
+
+**R58 / R59 — Navigation & user directory**
+- Given an authenticated user of any role, When they load the app, Then the primary navigation surface (My channels) and every role-appropriate destination are reachable by click; no screen is reachable only by typing a URL (R58).
+- Given a System Admin, Then both the Invite Management and User Management screens are reachable from the navigation (closing the previously URL-only `/admin/users`).
+- Given a small (mobile) viewport, Then the primary navigation collapses to a drawer and page content is never stacked below the full navigation.
+- Given an authenticated, active user searching the user directory, Then matching users are returned with **public identity only** (id, username, first/last name, avatar) and **no** email, `is_active`, `last_seen`, or `role` (R59); a deactivated user is excluded from picker results by default.
+- Given a channel admin adding a member, Then they select the user via directory search (R59), not by entering a raw user id.
 
 **R2 / R3 / R35 — Login, tokens, authenticated access**
 - Given valid credentials for an **active** account, When a user logs in, Then a short-lived access token and a refresh token are returned.
@@ -575,12 +595,36 @@ complexity. Re-evaluate via ADR when real usage data warrants it.
 
 **Visual tone / reference product.** Premium, minimal, and information-dense in the working app — closer to Linear/Raycast than a marketing site — with a distinctive ambient identity on low-density auth/onboarding surfaces (soft gradient/noise atmosphere), not decorative chrome throughout. No illustration/imagery beyond avatars. **Light and dark themes are both in scope** (system-preference default, user-toggleable, persisted) — supersedes the earlier "light mode only" note now that dark mode is explicitly directed. Full palette, type/spacing scale, elevation, motion tokens, and component states are defined in [`architecture/design-tokens.md`](../../architecture/design-tokens.md) — `frontend-engineer` must treat that file as a required input alongside this PRD, not optional polish.
 
+**Design documentation (v4).** The design system is now a dedicated set, authoritative for all frontend
+work alongside this PRD (structure and rationale: ADR-0013): `architecture/design-tokens.md` (values —
+color, type, density, spacing, radius, elevation, motion, z-index, breakpoints), `docs/design/DESIGN_SYSTEM.md`
+(components + layout), `docs/design/INFORMATION_ARCHITECTURE.md` (navigation + IA), `docs/design/UX_GUIDELINES.md`
+(principles + interaction patterns), and `docs/design/ACCESSIBILITY_GUIDELINES.md` (the a11y standard).
+
+**Navigation & IA (R58, ADR-0014).** The app shell is a persistent left sidebar (workspace mark · search/⌘K ·
+**Channels** [the R56 "My channels" list] · **Direct messages** · footer: Settings, Admin [role-gated], account +
+theme) with a contextual top bar and a single content region, collapsing to a drawer on small viewports. Every
+role-appropriate destination is reachable by click; the two System Admin screens are grouped under an **Admin**
+entry (fixing the previously URL-only User Management screen).
+
+**Direct-messages surface (ADR-0017).** 1:1 DMs (R12/R13) get a dedicated "Direct messages" sidebar section and
+reuse the shared conversation surface; a "New message" affordance opens the R59 user picker. *(This closes a build
+gap: DMs were v1-scoped with a working backend but had no frontend surface in the M0–M9 plan.)*
+
+**Conversation surface (ADR-0015).** A channel or DM is a full-height surface — header · flexing message timeline ·
+pinned composer — with members, roles, and admin controls in an on-demand **Channel details** drawer, not stacked
+above the messages.
+
+**Avatar entry.** Avatars are set by **upload through the media pipeline** on the profile screen (EXIF-stripped and
+content-sniffed per R31/R53), not by pasting a raw URL — resolving API-contract open question #1 and R27's avatar
+affordance.
+
 **UX states (responsive web; native mobile client remains a non-goal).**
 - **Empty states:** no channels joined (the empty state of the R56 "My channels" list — the primary logged-in navigation surface), empty channel, no DMs, empty public-channel list, no pending invites, no avatar (initials badge).
 - **Loading states:** channel-list fetch, history fetch, message send (optimistic + pending), media upload (progress + cancel), invite send (pending confirmation).
 - **Error states** (mapped from RFC 7807): send failure (retry), upload rejected (size/type reason), rate-limited (cooldown), session expired (re-login), account deactivated (clear message, not a generic login failure), expired/used invite or reset link (clear message + path to request a new one), removed from the channel currently being viewed (clear "you were removed from this channel" message + return to the channel list, R57), offline/reconnecting banner.
 - **Validation messages:** inline for registration, password change/reset, channel creation, message length, invite email format.
-- **Accessibility.** Target **WCAG 2.1 AA** (keyboard nav, focus management on new/live-updated messages, ARIA live-region for incoming messages/typing/edits/deletes, contrast, alt text). *(Default — confirm with PM/UX if a different bar is required.)*
+- **Accessibility.** Target **WCAG 2.2 AA** (adopted 2026-07-20; keyboard nav, focus management on new/live-updated messages, ARIA live-region for incoming messages/typing/edits/deletes, contrast, alt text, ≥24×24px target size, focus-not-obscured). Standard and per-component checklist: `docs/design/ACCESSIBILITY_GUIDELINES.md`.
 - **Timezones.** Server stores UTC; client renders local/relative time.
 
 **System Admin screens (role-gated; visible only to a System Admin).** Two dedicated screens
@@ -604,7 +648,7 @@ System Admin; a non-admin who navigates to them is redirected (no admin nav entr
   **last active System Admin cannot be deactivated** surfaces the `409` as a clear inline
   message ("the workspace must keep at least one active admin"), not a generic failure.
 
-## 12. Handoff to Design / ADR (open decisions — NOT resolved here)
+## 12. Handoff to Design / ADR (all decisions resolved via ADR as of v4)
 
 - [x] **Pagination strategy** — resolved: cursor-based (R11/R13/R39); ADR confirms cursor encoding.
 - [x] **Registration model** — resolved: invite-based, System-Admin-issued, email auto-verified (R1/R45).
@@ -613,13 +657,17 @@ System Admin; a non-admin who navigates to them is redirected (no admin nav entr
 - [x] **Channel discovery/lifecycle** — resolved: browse public list (R49), leave (R50), auto-succession (R51), no archive/delete.
 - [x] **Real-time edit/delete propagation** — resolved: yes, live (R52).
 - [x] **Media hygiene scope** — resolved: EXIF strip now (R53), AV scan deferred (accepted risk).
-- [ ] **DM data model** — reuse `channels` table (2-member private channel) vs dedicated `direct_messages` table. Prerequisite for R12/R13.
-- [ ] **Deployment target** — single Docker host vs Render/Fly.io/Railway. Prerequisite for Ship phase.
-- [ ] **Media storage backend** — S3-compatible bucket vs alternative (scope confirmed IN v1; backend choice open). Prerequisite for R30–R33.
-- [ ] **Revocable-session mechanism** — `token_version`-per-request vs refresh-token store/denylist vs short-TTL+rotation. Prerequisite for R16/R29/R34/R35/R47.
-- [ ] **Delivery correctness** — plain persist-then-publish vs transactional outbox for R40 (decide based on load-test findings).
-- [ ] **Transactional email provider/integration** — SMTP relay vs a provider API (e.g. SES/Postmark/etc.); templates for invite and reset emails. Prerequisite for R45/R48 and for the workspace to be usable at all.
-- [ ] **System Admin bootstrap mechanism** — env-var-seeded account vs first-run CLI/setup wizard. Prerequisite for R46.
+- [x] **Member/DM selection UX** — resolved: scoped workspace user-directory search (R59, ADR-0016), replacing add-by-raw-user-id; shared by the channel member-picker and the DM "new message" picker.
+- [x] **Direct-message frontend surface** — resolved: dedicated sidebar section reusing the shared conversation surface (ADR-0017); DM data model unchanged (ADR-0002).
+- [x] **DM data model** — resolved: no separate table; a DM is a `Message` with `recipient_id` set and `channel_id` null, conversation identity = canonical user-pair ([ADR-0002](../../architecture/adr/0002-dm-data-model.md)).
+- [x] **Deployment target** — resolved: managed PaaS, Render recommended (specific provider remains a human infra choice) ([ADR-0008](../../architecture/adr/0008-deployment-target.md)).
+- [x] **Media storage backend** — resolved: S3-compatible abstraction, validate-through-app, separate-origin signed URLs (concrete bucket/provider a human infra choice) ([ADR-0007](../../architecture/adr/0007-media-object-storage.md)).
+- [x] **Revocable-session mechanism** — resolved: server-side session store + Redis revocation check ([ADR-0006](../../architecture/adr/0006-revocable-sessions.md)); forced-change unblock reuses self-service reset ([ADR-0011](../../architecture/adr/0011-forced-password-change-unblock.md)).
+- [x] **Delivery correctness** — resolved for v1: persist-then-publish + at-least-once + client dedup ([ADR-0004](../../architecture/adr/0004-realtime-delivery-fanout.md)); a transactional outbox is revisited only if load-test findings (T41) require it.
+- [x] **Transactional email provider/integration** — resolved: provider-agnostic SMTP abstraction, fail-loud, no queue (specific provider a human infra choice) ([ADR-0010](../../architecture/adr/0010-transactional-email.md)).
+- [x] **System Admin bootstrap mechanism** — resolved: env-seeded account created at startup, non-skippable ([ADR-0009](../../architecture/adr/0009-system-admin-bootstrap.md)).
+
+> **§12 status (v4):** every decision above is resolved and recorded in the [ADR index](../../architecture/adr/README.md). The design/redesign decisions from the 2026-07-20 review are ADR-0013–0017. No open product or architecture decision remains for v1.
 
 ---
 🔒 **Approval gate:** human PM sign-off before Architecture begins. *(All product clarifications resolved as of this version — gate is now a formality/final read, not blocked on open questions.)*
