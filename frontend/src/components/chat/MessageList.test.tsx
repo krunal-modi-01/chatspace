@@ -210,4 +210,64 @@ describe('MessageList', () => {
     await userEvent.setup().type(screen.getByRole('textbox'), 'hi');
     expect(onTyping).toHaveBeenCalled();
   });
+
+  it('merges a live message (e.g. from another sender) into the rendered timeline alongside REST history (T51)', () => {
+    useMessageHistoryMock.mockReturnValue(
+      baseHistoryResult({ messages: [msg('01J8AAAA', { content: 'from history' })] }),
+    );
+    render(
+      <MessageList
+        channelId="01J0CHANNEL0000000000000000"
+        liveMessages={[msg('01J8BBBB', { content: 'from live socket', sender_id: 'other-user' })]}
+      />,
+    );
+
+    expect(screen.getByText('from history')).toBeInTheDocument();
+    expect(screen.getByText('from live socket')).toBeInTheDocument();
+  });
+
+  it('dedups by id when the same message appears in both REST history and the live stream', () => {
+    useMessageHistoryMock.mockReturnValue(
+      baseHistoryResult({ messages: [msg('01J8AAAA', { content: 'v1' })] }),
+    );
+    render(
+      <MessageList
+        channelId="01J0CHANNEL0000000000000000"
+        liveMessages={[msg('01J8AAAA', { content: 'v1' })]}
+      />,
+    );
+
+    expect(screen.getAllByText('v1')).toHaveLength(1);
+  });
+
+  it('reflects a live edit of a message already present in REST history', () => {
+    useMessageHistoryMock.mockReturnValue(
+      baseHistoryResult({ messages: [msg('01J8AAAA', { content: 'original' })] }),
+    );
+    render(
+      <MessageList
+        channelId="01J0CHANNEL0000000000000000"
+        liveMessages={[msg('01J8AAAA', { content: 'edited live', edited_at: '2026-07-02T15:00:00.000Z' })]}
+      />,
+    );
+
+    expect(screen.queryByText('original')).not.toBeInTheDocument();
+    expect(screen.getByText('edited live')).toBeInTheDocument();
+    expect(screen.getByText('(edited)')).toBeInTheDocument();
+  });
+
+  it('reflects a live delete of a message already present in REST history', () => {
+    useMessageHistoryMock.mockReturnValue(
+      baseHistoryResult({ messages: [msg('01J8AAAA', { content: 'to be deleted' })] }),
+    );
+    render(
+      <MessageList
+        channelId="01J0CHANNEL0000000000000000"
+        liveMessages={[msg('01J8AAAA', { content: '', deleted_at: '2026-07-02T15:00:00.000Z' })]}
+      />,
+    );
+
+    expect(screen.queryByText('to be deleted')).not.toBeInTheDocument();
+    expect(screen.getByText('This message was deleted.')).toBeInTheDocument();
+  });
 });

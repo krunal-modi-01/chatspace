@@ -12,6 +12,14 @@ vi.mock('../../hooks/usePresenceAndTyping', () => ({
   usePresenceAndTyping: (conversation: unknown) => usePresenceAndTypingMock(conversation),
 }));
 
+// `useConversationSocket` (T51 integration) also opens a real `/v1/ws`
+// connection when unmocked — none of these presence-focused tests exercise
+// live message delivery (see `ChannelPage.liveMessages.test.tsx`).
+const { useConversationSocketMock } = vi.hoisted(() => ({ useConversationSocketMock: vi.fn() }));
+vi.mock('../../hooks/useConversationSocket', () => ({
+  useConversationSocket: (conversation: unknown) => useConversationSocketMock(conversation),
+}));
+
 const CURRENT_USER = {
   id: 'user-1',
   username: 'alice',
@@ -74,6 +82,13 @@ describe('ChannelPage — presence + typing wiring (T34)', () => {
       presenceByUserId: new Map(),
       sendTyping: vi.fn(),
       fatalError: null,
+    });
+    useConversationSocketMock.mockReturnValue({
+      status: 'closed',
+      messages: [],
+      isReconnecting: false,
+      fatalError: null,
+      catchUpError: null,
     });
   });
 

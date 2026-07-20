@@ -72,11 +72,13 @@ export interface PresenceAndTypingState {
  * Deliberately independent of `useConversationSocket` (T33): that hook
  * already ignores `typing`/`presence` frames by design and additionally
  * owns REST catch-up + live message state that this hook has no need to
- * duplicate. Wiring both into the same view would mean two live
- * connections for one conversation, which the technical spec's "1
- * WebSocket per tab" design does not intend — if a future task wires
- * `useConversationSocket` into the message view too, the two should be
- * consolidated into a single connection rather than run side by side.
+ * duplicate. `ChannelPage` now calls both hooks side by side (T51
+ * integration, so `MessageList` actually receives live message events) —
+ * that means two live connections per open channel view today, which the
+ * technical spec's "1 WebSocket per tab" design does not intend long-term.
+ * Consolidating the two into a single connection is a known, tracked
+ * follow-up, not done here to keep that change scoped and separately
+ * reviewable from the message-delivery fix.
  *
  * Pass `null` to stay disconnected (e.g. viewer isn't an authorized
  * participant of `conversation` yet).

@@ -11,6 +11,7 @@ import { Select } from '../../components/ui/Select';
 import { useAuth } from '../../hooks/useAuth';
 import { useChannelDetail } from '../../hooks/useChannelDetail';
 import { useChannelRemovalNotice } from '../../hooks/useChannelRemovalNotice';
+import { useConversationSocket } from '../../hooks/useConversationSocket';
 import { usePresenceAndTyping } from '../../hooks/usePresenceAndTyping';
 import { ApiError } from '../../api/problem';
 import type { ChannelMember, ChannelRole, ConversationTarget } from '../../api/types';
@@ -210,6 +211,15 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
     presenceByUserId,
     sendTyping,
   } = usePresenceAndTyping(conversationTarget);
+
+  // Separate connection from `usePresenceAndTyping` above, by design for
+  // now (T51 integration) — see that hook's docstring for why the two
+  // aren't yet consolidated into a single socket. This one supplies the
+  // live `message.created/edited/deleted` events `MessageList` was
+  // otherwise missing entirely (it previously only ever rendered REST
+  // history, so other members' messages required a page refresh to
+  // appear).
+  const { messages: liveMessages } = useConversationSocket(conversationTarget);
 
   // Live `channel.member_removed` for the channel currently open (F75, Flow
   // L step 4a) — takes priority over every other state below since the
@@ -536,6 +546,7 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
               typingUserIds={typingUserIds}
               onTyping={sendTyping}
               wsStatus={wsStatus}
+              liveMessages={liveMessages}
             />
           </div>
         </Card>

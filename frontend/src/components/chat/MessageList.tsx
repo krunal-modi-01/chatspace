@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, type JSX } from 'react';
-import type { ConversationTarget } from '../../api/types';
+import { useEffect, useLayoutEffect, useMemo, useRef, type JSX } from 'react';
+import type { ConversationTarget, Message } from '../../api/types';
 import { useAuth } from '../../hooks/useAuth';
 import { useChannelMembers } from '../../hooks/useChannelMembers';
 import { useMessageHistory } from '../../hooks/useMessageHistory';
+import { emptyMessageMap, sortedMessages, upsertMessages } from '../../ws/messageStore';
 import type { WsStatus } from '../../ws/socketClient';
 import { AlertBanner } from '../ui/AlertBanner';
 import { Button } from '../ui/Button';
@@ -26,6 +27,16 @@ export interface MessageListProps {
   typingUserIds?: string[];
   onTyping?: () => void;
   wsStatus?: WsStatus;
+  /** Live `message.created`/`message.edited`/`message.deleted` events for
+   * this channel (T33/T51 integration), owned by the caller
+   * (`useConversationSocket`) so the same hook can also serve future
+   * multi-surface reuse. Merged with REST history by id below — live wins
+   * on a same-id conflict (it's the freshest source for another member's
+   * edit/delete), so other members' messages render without waiting for a
+   * refetch. Optional/defaults to empty so this component keeps working
+   * standalone (existing call sites/tests) without a live connection
+   * established. */
+  liveMessages?: Message[];
 }
 
 function scrollToBottom(el: HTMLElement | null): void {
@@ -36,19 +47,22 @@ function scrollToBottom(el: HTMLElement | null): void {
 
 /** Ties together REST history/infinite-scroll, optimistic send, author
  * edit/delete, and identity lookup into the full channel messaging surface
- * (T32). Live WS delivery is explicitly out of scope here (T33). */
+ * (T32). Live WS delivery (T33) is merged in via the optional
+ * `liveMessages` prop (T51 integration) — see that prop's doc comment for
+ * the merge precedence. */
 export function MessageList({
   channelId,
   typingUserIds = [],
   onTyping,
   wsStatus = 'closed',
+  liveMessages = [],
 }: MessageListProps): JSX.Element {
   const { user } = useAuth();
   const currentUserId = user?.id ?? null;
 
   const target: ConversationTarget = { kind: 'channel', channel_id: channelId };
   const {
-    messages,
+    messages: historyMessages,
     pendingSends,
     isLoadingInitial,
     isLoadingOlder,
@@ -63,6 +77,19 @@ export function MessageList({
     editMessage,
     deleteMessage,
   } = useMessageHistory(target, currentUserId);
+
+  // Merges REST-sourced history with live socket events by id, using the
+  // same dedup/upsert helper both sources already build on
+  // (`ws/messageStore`). Live wins on a same-id conflict — it's the
+  // freshest source for another member's edit/delete arriving after the
+  // page's initial history fetch.
+  const messages = useMemo(() => {
+    if (liveMessages.length === 0) {
+      return historyMessages;
+    }
+    const merged = upsertMessages(upsertMessages(emptyMessageMap(), historyMessages), liveMessages);
+    return sortedMessages(merged);
+  }, [historyMessages, liveMessages]);
 
   const { membersById, error: membersError } = useChannelMembers(channelId);
 
