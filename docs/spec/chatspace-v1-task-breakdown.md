@@ -4,7 +4,7 @@
 
 ## Summary
 
-This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks across six milestones, plus a small M7 addenda milestone for gaps found post-implementation: **M0 Foundation** (skeleton, config, DB/Redis wiring, the initial schema migration, shared id/pagination utilities), **M1 Auth & Onboarding** (security primitives, revocable sessions, email, non-skippable admin bootstrap, invites, registration, login/reset), **M2 Core Domain** (profile, channels, membership + succession, admin deactivate, messages, DMs), **M3 Realtime** (WS connection manager, Redis persist-then-publish fan-out, presence, typing), **M4 Cross-cutting** (rate limiting, media pipeline + association), **M5 Frontend** (auth/channel/messaging/WS/presence/media UI + WCAG AA), **M6 Ship** (docker-compose, CI, observability, Render deploy, load test + restore drill GA gate), **M7 Addenda** (T42: closes the `must_change_password` lockout discovered while exercising T30, per ADR-0011), and **M8 Admin surfaces** (T43–T47: the System Admin invite/user-management screens and their backing list endpoints, closing a frontend traceability gap where admin capabilities were specified only as backend behavior — PRD v2 §11, R54/R55, F71/F72; T44 also lands the T20 deactivate/reactivate endpoints), and **M9 My channels & live membership** (T48–T52: the caller-scoped `GET /v1/channels` list, the per-user WS topic with `channel.member_added`/`channel.member_removed` events per ADR-0012, the live-updating My Channels navigation UI, and an a11y pass — closing a traceability gap where a user added to a private channel could not see it anywhere; the public browse F30 excludes own memberships and no "list my channels" read was ever specified — PRD v3 R56/R57, F73–F75). The ordering honors persist-then-publish (T24 after message persistence), auth-before-join WS semantics, and the 1,000-user single-Postgres/single-Redis constraint. Backend and frontend tracks run largely in parallel against the frozen API contract.
+This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks across six milestones, plus a small M7 addenda milestone for gaps found post-implementation: **M0 Foundation** (skeleton, config, DB/Redis wiring, the initial schema migration, shared id/pagination utilities), **M1 Auth & Onboarding** (security primitives, revocable sessions, email, non-skippable admin bootstrap, invites, registration, login/reset), **M2 Core Domain** (profile, channels, membership + succession, admin deactivate, messages, DMs), **M3 Realtime** (WS connection manager, Redis persist-then-publish fan-out, presence, typing), **M4 Cross-cutting** (rate limiting, media pipeline + association), **M5 Frontend** (auth/channel/messaging/WS/presence/media UI + WCAG AA), **M6 Ship** (docker-compose, CI, observability, Render deploy, load test + restore drill GA gate), **M7 Addenda** (T42: closes the `must_change_password` lockout discovered while exercising T30, per ADR-0011), and **M8 Admin surfaces** (T43–T47: the System Admin invite/user-management screens and their backing list endpoints, closing a frontend traceability gap where admin capabilities were specified only as backend behavior — PRD v2 §11, R54/R55, F71/F72; T44 also lands the T20 deactivate/reactivate endpoints), and **M9 My channels & live membership** (T48–T52: the caller-scoped `GET /v1/channels` list, the per-user WS topic with `channel.member_added`/`channel.member_removed` events per ADR-0012, the live-updating My Channels navigation UI, and an a11y pass — closing a traceability gap where a user added to a private channel could not see it anywhere; the public browse F30 excludes own memberships and no "list my channels" read was ever specified — PRD v3 R56/R57, F73–F75). The ordering honors persist-then-publish (T24 after message persistence), auth-before-join WS semantics, and the 1,000-user single-Postgres/single-Redis constraint. Backend and frontend tracks run largely in parallel against the frozen API contract. **M10 Design foundation & redesign** (T53–T84) then executes the 2026-07-20 UX/design review against a new design documentation set (`architecture/design-tokens.md` v3 + `docs/design/*`, governed by ADR-0013–0017): a token → component → IA → conversation-surface redesign, the previously-unbuilt **DM frontend surface** (ADR-0017), and the **R59/F76 user-directory read** (ADR-0016) that makes member-add and DM-start usable — off the critical path, behind a human design 🔒 gate.
 
 ## Milestone overview
 
@@ -15,11 +15,12 @@ This decomposes the chatspace v1 TSD into 41 dependency-ordered, PR-sized tasks 
 | **M2 — Core Domain** | T17–T22 | backend | Profile, channels, membership, messages, DMs (REST) |
 | **M3 — Realtime** | T23–T26 | backend | WS delivery, cross-instance fan-out, presence, typing |
 | **M4 — Cross-cutting** | T27–T29 | backend | Rate limiting, media pipeline |
-| **M5 — Frontend** | T30–T36 | frontend, accessibility | Full SPA + WCAG 2.1 AA |
+| **M5 — Frontend** | T30–T36 | frontend, accessibility | Full SPA + WCAG 2.2 AA |
 | **M6 — Ship** | T37–T41 | infrastructure, devops, performance | Docker, CI, observability, deploy, GA validation |
 | **M7 — Addenda** | T42 | backend, frontend | Closes the `must_change_password` login lockout (ADR-0011) |
 | **M8 — Admin surfaces** | T43–T47 | backend, frontend, accessibility | System Admin screens (invite + user management) + their backing list endpoints; closes the frontend traceability gap (PRD v2 §11, R54/R55, F71/F72) |
 | **M9 — My channels & live membership** | T48–T52 | backend, frontend, accessibility | Caller-scoped channel list + per-user WS membership events + live-updating nav UI; closes the added-to-private-channel visibility gap (PRD v3 R56/R57, F73–F75, ADR-0012) |
+| **M10 — Design foundation & redesign** | T53–T84 | frontend, backend, accessibility, architecture (design) | Token/component/IA/conversation redesign per ADR-0013–0017 + `docs/design/`; adds the DM frontend surface (ADR-0017) and the R59/F76 user-directory read (ADR-0016); off the critical path, behind a design 🔒 gate |
 
 Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff check` / `npm run lint`; **TYPE** = `mypy app` / `npm run typecheck`; **TEST** = `pytest` / `npm run test`; **SEC** = secret-scan hook passes + security-reviewer sign-off (invoked wherever auth/PII/secrets/tokens are touched).
 
@@ -418,11 +419,11 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 - **Acceptance:** Upload+attach+render/download work; 413/415/429 surfaced; presigned URL used at fetch time; LINT/TYPE/TEST pass.
 - **Refs:** API contract media; FS F57–F62.
 
-### T36 — Accessibility pass (WCAG 2.1 AA)
+### T36 — Accessibility pass (WCAG 2.2 AA)
 - **Owner:** `accessibility-auditor` (+ `frontend-engineer`) · **Depends on:** T30–T35
 - **Scope:** ARIA live regions for incoming messages/typing/edits/deletes, keyboard nav, focus management on live updates, contrast, alt text, initials-badge semantics.
 - **Acceptance:** Automated a11y checks pass; keyboard-only flows for auth/channel/message verified; live-region announcements verified; LINT/TYPE/TEST pass.
-- **Refs:** FS §9 (WCAG 2.1 AA); TSD §3 React SPA.
+- **Refs:** FS §9 (WCAG 2.2 AA); TSD §3 React SPA.
 
 ---
 
@@ -525,11 +526,11 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 - **Acceptance:** Admin can list/search users and deactivate/reactivate; deactivation asks for confirmation; last-active-admin 409 renders the specific message; deactivated users remain visible in the list; LINT/TYPE/TEST pass.
 - **Refs:** PRD §11 (User Management), R47/R55; FS F25–F28, F72, Flow D; API contract `/v1/admin/users*`.
 
-### T47 — Accessibility pass over the admin screens (WCAG 2.1 AA)
+### T47 — Accessibility pass over the admin screens (WCAG 2.2 AA)
 - **Owner:** `accessibility-auditor` (+ `frontend-engineer`) · **Depends on:** T45, T46
 - **Scope (in):** Keyboard nav across both admin screens; focus management on the invite-issue form and the deactivate-confirm affordance; ARIA on the invite/user lists (table semantics) and confirmation dialog; status/error announcements via a live region; contrast on status badges (pending/revoked, active/inactive).
 - **Acceptance:** Automated a11y checks pass; keyboard-only issue/resend/revoke and deactivate/reactivate flows verified; confirm-dialog focus trap + return-focus verified; LINT/TYPE/TEST pass.
-- **Refs:** FS §9 (WCAG 2.1 AA); PRD §11; mirrors T36.
+- **Refs:** FS §9 (WCAG 2.2 AA); PRD §11; mirrors T36.
 
 ---
 
@@ -575,11 +576,65 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 - **Acceptance:** A channel the user is added to (by an admin, or from another tab) appears live without refresh; a removed channel disappears live and an open view of it exits with the specific message; reconnect after missed events yields a correct list; unknown WS event types remain tolerated; LINT/TYPE/TEST pass.
 - **Refs:** PRD R57, §11; FS F74/F75, Flow L; API contract WS events; ADR-0012.
 
-### T52 — Accessibility pass (My Channels, WCAG 2.1 AA)
+### T52 — Accessibility pass (My Channels, WCAG 2.2 AA)
 - **Owner:** `accessibility-auditor` (+ `frontend-engineer`) · **Depends on:** T50, T51
 - **Scope (in):** Navigation/list semantics for the My Channels surface; keyboard nav; ARIA live-region announcements for channels appearing/disappearing (extends the existing live-region inventory); focus management when the currently-viewed channel is removed; contrast on visibility/role badges.
 - **Acceptance:** Automated a11y checks pass; keyboard-only navigation into/out of channels verified; live announcements for add/remove verified; focus behavior on removal verified; LINT/TYPE/TEST pass.
-- **Refs:** FS §9 (WCAG 2.1 AA); PRD §11; mirrors T36/T47.
+- **Refs:** FS §9 (WCAG 2.2 AA); PRD §11; mirrors T36/T47.
+
+---
+
+## M10 — Design foundation & redesign (from the 2026-07-20 UX/design review)
+
+> **Context.** The review found the app reads as generic and disconnected: the token layer is sound but there was no design layer above the task list, the conversation was subordinate to channel administration, the navigation graph had orphaned/unreachable screens, DMs were v1-scoped with a working backend (T22) but had **no frontend surface** in M0–M9, and the design system was defined yet unadopted (six badge implementations, a mis-defaulted `Button`, raw palette classes, no font, no skeletons). This milestone executes the redesign against the now-authoritative design documentation — `architecture/design-tokens.md` v3 and `docs/design/{DESIGN_SYSTEM,INFORMATION_ARCHITECTURE,UX_GUIDELINES,ACCESSIBILITY_GUIDELINES}.md`, governed by **ADR-0013–0017**. It also adds the **R59/F76 user-directory read** (ADR-0016) that makes member-add and DM-start usable. Sequenced **foundations-first** (tokens → primitives → shell → surface → workflows → responsive/a11y/polish) so no component is redesigned twice. **Off the critical path.** A human **design 🔒 gate** (ADR-0013–0017 sign-off) precedes phase D2+; the conversation-surface refactor ships behind a route-level feature flag with the old page retained until acceptance.
+
+### D1 — Token foundation (`design-tokens.md` v3; no visual regression intended)
+**T53 — Typography foundation.** frontend · deps T08 · Self-host a variable sans; add `--font-sans`/`--font-mono`, a tabular-nums utility, heading tracking; apply on `body`. *Accept:* app renders in the bundled font (no OS default), no external CDN (CSP), visual diff shows only the font change. *Refs:* design-tokens §4.
+**T54 — Density / z-index / breakpoint tokens.** frontend · deps T53 · Add control/row-height, `--z-*`, `--bp-*` tokens to `index.css`. *Accept:* tokens present + documented; no consumer required yet. *Refs:* §6/§8/§9.
+**T55 — Semantic recipes + motion.** frontend · deps T54 · Badge-tint `color-mix` recipe, `--focus-ring-*`, `--motion-*`, reduced-motion guard. *Refs:* §11/§12.
+**T56 — Reconcile feedback/badges to tokens + lint guard.** frontend · deps T55 · Move `AlertBanner` colors to §12 recipes; add a CI lint/grep banning raw `gray-*|amber-*|emerald-*|red-*|indigo-*` in components. *Accept:* 0 raw-palette classes; banners theme-correct both themes. *Refs:* §12.
+
+### D2 — Component system (`DESIGN_SYSTEM.md`)
+**T57 — `Button` overhaul + migrate call sites.** frontend · deps T55 · Intrinsic width + `fullWidth`; sizes `sm`/`md`; `ghost`/`link` variants; link rendering; migrate all sites off `w-auto` and bespoke table buttons. *Accept:* no `w-auto` overrides; table actions use `size="sm"`; all states per tokens §13. *Refs:* DS §3.1.
+**T58 — `Badge` primitive + de-dup.** frontend · deps T55 · New `Badge`; delete `RoleBadge` (×2), `VisibilityBadge`, `StatusBadge`, inline pills. *Accept:* one implementation; grep shows 0 duplicate pill impls. *Refs:* DS §3.2.
+**T59 — `Textarea` primitive.** frontend · deps T55 · Extract from composer / message-edit / add-member. *Refs:* DS §3.3.
+**T60 — `Skeleton` primitive.** frontend · deps T55 · Shape-matching; reduced-motion aware. *Refs:* DS §3.6.
+**T61 — `EmptyState` primitive.** frontend · deps T57 · Icon + line + primary action. *Refs:* DS §3.6.
+**T62 — `Confirm` + `Dialog` + `Drawer`.** frontend · deps T57, T64 · Inline confirm + modal dialog + right slide-over; focus trap/return; `--z-*`. *Refs:* DS §3.7/3.8.
+**T63 — `Toast` layer.** frontend · deps T55 · Live-region-backed; `--z-toast`. *Refs:* DS §3.5.
+**T64 — Icon set + `IconButton`.** frontend · deps T57 · Self-hosted stroke set; `IconButton` with `aria-label`. *Refs:* DS §3.9.
+**T65 — `Avatar` presence + shell adoption.** frontend · deps T58 · Presence-dot slot; replace `UserMenu`'s bare initial with `Avatar`. *Refs:* DS §3.4.
+
+### D3 — IA & navigation (`INFORMATION_ARCHITECTURE.md`, ADR-0014)
+**T66 — App-shell redesign.** frontend · deps T57, T64, T65 · Persistent sidebar (mark→home · search/⌘K · Channels · Direct messages [empty until T75] · footer: Settings/Admin[role-gated]/account+theme), contextual top bar, single content region. *Refs:* IA §2/§4, ADR-0014.
+**T67 — Nav-graph repair.** frontend · deps T66 · Admin group linking invites+users; resolve `/` (redirect to last/first channel, no dead landing); `NotFoundPage` on-system + in-shell. *Accept:* no orphan routes; `/admin/users` reachable; R58 test passes. *Refs:* IA §3.
+**T68 — Mobile drawer.** frontend · deps T66 · Sidebar → drawer `< md`; content never stacked below nav. *Refs:* IA §2, DS §6.
+**T69 — Quick switcher (⌘K).** frontend · deps T66 · Channels now; DMs/users later; keyboard-driven. *Refs:* UX §5.
+
+### D4 — Conversation surface (ADR-0015; behind a feature flag)
+**T70 — `ChannelPage` layout refactor.** frontend · deps T62, T66 · Full-height header / flexing timeline / pinned composer; members/roles/add-member/leave/frozen → **Channel details `Drawer`**; flag-gated, old page retained. *Refs:* ADR-0015, DS §5.3/4.5.
+**T71 — `MessageTimeline` redesign.** frontend · deps T70 · Flat left-aligned grouped rows, date separators, hover/focus actions, drop right-alignment, real timestamps; preserve `role="log"`/live region. *Refs:* ADR-0015, DS §4.3.
+**T72 — Composer refinement.** frontend · deps T70, T59, T64 · `IconButton` attach, counter near-limit only, `Textarea`; keep optimistic/retry/rate-limit behavior. *Refs:* DS §4.4.
+
+### D5 — User directory, pickers, DMs & workflow polish
+**T73 — Backend: user-directory search (`GET /v1/users/search`).** backend (+security-reviewer) · deps T10, T07 · Scoped authenticated read; minimal public fields (`id,username,first_name,last_name,avatar_url`); cursor paginated; excludes deactivated by default; rate-limited; **never** returns `email`/`is_active`/`last_seen`/`role`. *Accept:* field-minimization is a SEC criterion; non-admin caller allowed; `api-change-guard` satisfied. *Refs:* R59/F76, ADR-0016, API `/v1/users/search`.
+**T74 — Member picker (replaces add-by-UUID).** frontend · deps T62, T73 · Channel-details add-member uses directory-search typeahead; add stays admin-gated. *Accept:* a private channel can be populated by name search, no UUID. *Refs:* F32/F33/F76, ADR-0016.
+**T75 — DM surface.** frontend · deps T70, T73, T66 · Sidebar "Direct messages" section (recent conversations + presence), "New message" picker (T73), route `/dms/:userId` reusing the conversation surface (`ConversationTarget={kind:'dm'}`), empty state. *Accept:* start + read + send a DM end-to-end reusing the shared timeline/composer. *Refs:* ADR-0017/0015, R12/R13/F46–F48.
+**T76 — Admin screens polish.** frontend · deps T57, T58, T63 · Relative/short timestamps, `Badge` migration, debounced search + result count, `size="sm"` actions, `Dialog` confirm for deactivate. *Refs:* DS, UX §3.
+**T77 — `ChannelsPage` hierarchy.** frontend · deps T61, T57 · Browse-first; create behind a disclosure/button; empty-state cross-link. *Refs:* IA §5.
+**T78 — Auth + profile refinements.** frontend · deps T57, T59 · Show-password toggle; inline password-rule validation; a profile screen with **avatar upload via the media pipeline** (retires the raw-URL field; resolves API open-Q#1). *Refs:* UX §3.5, PRD §11 v4.
+
+### D6 — Responsive
+**T79 — Responsive tables → cards.** frontend · deps T66, T58 · Members/invites/users/sessions stack to label:value cards `< md`; no horizontal scroll dependency. *Refs:* DS §6.
+
+### D7 — Accessibility hardening (extends T36/T47/T52)
+**T80 — A11y pass over the new component library.** accessibility-auditor (+ frontend) · deps T57–T69, T70–T75 · Menu keyboard pattern (`UserMenu`, ⌘K), `Dialog`/`Drawer` focus trap+return, `Toast` live region, `Badge` contrast both themes, focus-not-obscured, live announcements for sidebar add/remove. *Accept:* axe 0 serious/critical both themes; keyboard-only walkthrough of all primary flows. *Refs:* ACCESSIBILITY_GUIDELINES §4/§5.
+**T81 — WCAG 2.2 AA deltas.** accessibility-auditor · deps T80 · Apply the 2.2-over-2.1 deltas (now the adopted standard): target-size ≥24px on row actions; focus-not-obscured for the sticky header, pinned composer, drawer scrim, and toasts. *Refs:* ACCESSIBILITY_GUIDELINES §1.
+
+### D8 — Visual polish & motion
+**T82 — Skeletons + empty states everywhere.** frontend · deps T60, T61 · Sidebar/tables/timeline skeletons; designed empty states on every async surface. *Refs:* UX §3.2/3.3.
+**T83 — Motion pass.** frontend · deps T55 · Token-driven transitions; verify reduced-motion; new-message divider + scroll-to-bottom affordance. *Refs:* UX §4.
+**T84 — Auto-load older history.** frontend · deps T71 · IntersectionObserver replaces the manual "load older" button. *Refs:* UX §3.2.
 
 ---
 
@@ -594,6 +649,7 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 - **Ship (M6)** — T37 can be built early (right after M0); T38 follows T37; **T39 and T40 parallel**; T41 is the final serial GA gate depending on the whole system.
 - **Wave M8** — **T43 and T44 run in parallel** (invite-list vs admin-users, different modules) once their deps (T13; T15/T19/T10) are met; frontend **T45 then T46** (T46 reuses T45's `AdminRoute`/nav/`adminApi`); T47 is a finishing a11y sweep after both screens. The whole milestone is off the critical path.
 - **Wave M9** — **T48 and T49 run in parallel** (REST read vs WS plumbing, different modules) once their deps (T18/T07/T10; T23/T24/T19) are met; frontend **T50 then T51** (T51 consumes T49's events through T50's list); T52 is a finishing a11y sweep after both. The whole milestone is off the critical path.
+- **Wave M10 (redesign)** — **foundations-first** so nothing is redesigned twice: **D1 (T53–T56)** tokens land before **D2 (T57–T65)** components; **D3 (T66–T69)** shell/nav and the *authoring* of **D5 (T74–T78)** workflows proceed once D2 lands; **T73 (backend user-search) is independent** and can start right after T10; **D4 (T70–T72)** conversation surface waits on D2+D3 and ships behind a feature flag; **T74** waits on T73, **T75 (DMs)** on T70+T73; **D6 (T79)**, **D7 (T80–T81)**, **D8 (T82–T84)** trail as continuous checks/polish. Off the critical path.
 
 **Critical path:** T01→T03→T04→T10→(T18→T19)→T21→T23→T24→T29→T41
 
@@ -604,3 +660,5 @@ Standard gate shorthand used below (from `CLAUDE.md` commands): **LINT** = `ruff
 **M8 addenda note:** T43–T47 close a frontend traceability gap found post-implementation (admin capabilities were specified only as backend behavior; the screens and their backing reads were never scoped — PRD v2 §11, R54/R55, F71/F72). Off the critical path, no downstream dependents. T44 also lands the deactivate/reactivate endpoints originally scoped as T20 (in `app/api/admin.py`). Schedulable once T13/T15/T19 are merged.
 
 **M9 addenda note:** T48–T52 close a traceability gap found post-implementation: a user added to a private channel had no way to see it — the public browse (F30) excludes own memberships, and no "list my channels" read or membership-change propagation was ever specified (PRD v3 R56/R57, FS F73–F75, ADR-0012). Off the critical path, no downstream dependents, **no schema change** (`ix_channel_members_user` already serves the read). Schedulable once T18/T19/T23/T24 are merged.
+
+**M10 addenda note:** T53–T84 execute the 2026-07-20 UX/design redesign against the design documentation (`architecture/design-tokens.md` v3, `docs/design/*`, ADR-0013–0017). A human **design 🔒 gate** (ADR sign-off) precedes phase D2+; the conversation-surface refactor (T70–T72) ships **behind a route-level feature flag** with the old page retained until acceptance. **T73** (new `GET /v1/users/search`) routes through the security-reviewer/secret-scan gate — a new authenticated read exposing the workspace directory, field-minimized per ADR-0016 — and `api-change-guard`. **T81** applies the WCAG 2.2 AA deltas — the adopted accessibility standard. Closes the DM-frontend build gap (DMs were v1-scoped with a working backend, T22, but had no UI in M0–M9). Off the critical path.
