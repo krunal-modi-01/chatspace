@@ -37,7 +37,7 @@ export function PasswordResetRequestPage(): JSX.Element {
                   onChange={(event) => setEmail(event.target.value)}
                 />
 
-                <Button type="submit" isLoading={isSubmitting} loadingText="Sending…">
+                <Button type="submit" fullWidth isLoading={isSubmitting} loadingText="Sending…">
                   Send reset link
                 </Button>
               </form>

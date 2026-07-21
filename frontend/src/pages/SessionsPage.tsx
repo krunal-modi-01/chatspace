@@ -1,6 +1,7 @@
 import type { JSX } from 'react';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { useSessions } from '../hooks/useSessions';
 
@@ -46,14 +47,16 @@ export function SessionsPage(): JSX.Element {
                 </p>
               </div>
               {!session.current && (
-                <button
+                <Button
                   type="button"
+                  variant="secondary"
+                  size="sm"
+                  isLoading={revokingId === session.session_id}
+                  loadingText="Revoking…"
                   onClick={() => revoke(session.session_id)}
-                  disabled={revokingId === session.session_id}
-                  className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-body font-medium text-[var(--color-text-primary)] transition-colors duration-150 ease-out hover:bg-[var(--color-surface-raised)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {revokingId === session.session_id ? 'Revoking…' : 'Revoke'}
-                </button>
+                  Revoke
+                </Button>
               )}
             </li>
           ))}

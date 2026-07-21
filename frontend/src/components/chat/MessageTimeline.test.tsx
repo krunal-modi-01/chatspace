@@ -113,6 +113,20 @@ describe('MessageTimeline', () => {
     expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(1);
   });
 
+  it('keeps Edit/Delete visually distinguishable under the ghost variant (accent vs. danger tint)', () => {
+    render(
+      <MessageTimeline
+        messages={[makeMessage({ id: '01J8AAAA', sender_id: OWN_ID })]}
+        currentUserId={OWN_ID}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Edit' })).toHaveClass('text-[var(--color-accent)]!');
+    expect(screen.getByRole('button', { name: 'Delete' })).toHaveClass('text-[var(--color-danger)]!');
+  });
+
   it('edits a message: shows a draft textarea, saves, and exits edit mode on success', async () => {
     const user = userEvent.setup();
     const onEdit = vi.fn().mockResolvedValue(undefined);

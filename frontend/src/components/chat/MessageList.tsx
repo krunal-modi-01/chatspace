@@ -154,7 +154,7 @@ export function MessageList({
         ) : historyError !== null ? (
           <div className="flex flex-col gap-3">
             <ErrorBanner error={historyError} />
-            <Button type="button" variant="secondary" className="w-auto" onClick={retryInitialLoad}>
+            <Button type="button" variant="secondary" onClick={retryInitialLoad}>
               Retry
             </Button>
           </div>
@@ -164,7 +164,7 @@ export function MessageList({
               <Button
                 type="button"
                 variant="secondary"
-                className="w-auto self-center"
+                className="self-center"
                 isLoading={isLoadingOlder}
                 loadingText="Loading older messages…"
                 onClick={handleLoadOlder}
@@ -199,20 +199,18 @@ export function MessageList({
                           {pending.error ?? 'Failed to send.'}
                           {pending.retryAfterSeconds !== undefined && ` Try again in ${pending.retryAfterSeconds}s.`}
                         </span>
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-[var(--color-accent)]! hover:text-[var(--color-accent-hover)]!"
                           onClick={() => void retrySend(pending.id)}
-                          className="text-caption font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]"
                         >
                           Retry
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => discardFailedSend(pending.id)}
-                          className="text-caption font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                        >
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => discardFailedSend(pending.id)}>
                           Discard
-                        </button>
+                        </Button>
                       </div>
                     )}
                   </li>

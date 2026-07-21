@@ -120,7 +120,9 @@ describe('MessageList', () => {
     render(<MessageList channelId="01J0CHANNEL0000000000000000" />);
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    const retryButton = screen.getByRole('button', { name: 'Retry' });
+    expect(retryButton).toHaveClass('text-[var(--color-accent)]!');
+    await user.click(retryButton);
     expect(retrySend).toHaveBeenCalledWith('temp-1');
 
     await user.click(screen.getByRole('button', { name: 'Discard' }));

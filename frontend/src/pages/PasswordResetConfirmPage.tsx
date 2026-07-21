@@ -58,7 +58,7 @@ export function PasswordResetConfirmPage(): JSX.Element {
                 hint="At least 6 characters, with at least one letter and one digit."
               />
 
-              <Button type="submit" isLoading={isSubmitting} loadingText="Saving…">
+              <Button type="submit" fullWidth isLoading={isSubmitting} loadingText="Saving…">
                 Set new password
               </Button>
             </form>

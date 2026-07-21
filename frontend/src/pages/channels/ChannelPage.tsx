@@ -106,26 +106,29 @@ function MemberRow({
               <Button
                 type="button"
                 variant="danger"
-                className="w-auto"
+                size="sm"
                 isLoading={isBusy}
                 loadingText="Confirming…"
                 onClick={onConfirmSelfAction}
               >
                 Confirm
               </Button>
-              <Button type="button" variant="secondary" className="w-auto" disabled={isBusy} onClick={onCancelSelfAction}>
+              <Button type="button" variant="secondary" size="sm" disabled={isBusy} onClick={onCancelSelfAction}>
                 Cancel
               </Button>
             </div>
           ) : (
-            <button
+            <Button
               type="button"
+              variant="danger"
+              size="sm"
+              isLoading={isBusy}
+              loadingText="Removing…"
+              disabled={isFrozen}
               onClick={() => onRequestRemove(member.user_id)}
-              disabled={isFrozen || isBusy}
-              className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-body font-medium text-[var(--color-danger)] transition-colors duration-150 ease-out hover:bg-[var(--color-surface-raised)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isBusy ? 'Removing…' : 'Remove'}
-            </button>
+              Remove
+            </Button>
           ))}
       </td>
     </tr>
@@ -223,7 +226,6 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
         <Button
           type="button"
           variant="secondary"
-          className="w-auto"
           onClick={() => {
             dismissRemovalNotice();
             navigate('/channels');
@@ -247,7 +249,7 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
     return (
       <div className="max-w-3xl space-y-4">
         <ErrorBanner error={channelError} />
-        <Button type="button" variant="secondary" className="w-auto" onClick={() => navigate('/channels')}>
+        <Button type="button" variant="secondary" onClick={() => navigate('/channels')}>
           Back to channels
         </Button>
       </div>
@@ -329,7 +331,6 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
               <Button
                 type="button"
                 variant="danger"
-                className="w-auto"
                 isLoading={isLeaving}
                 loadingText="Leaving…"
                 onClick={handleLeave}
@@ -339,7 +340,6 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
               <Button
                 type="button"
                 variant="secondary"
-                className="w-auto"
                 disabled={isLeaving}
                 onClick={() => setIsConfirmingLeave(false)}
               >
@@ -347,12 +347,12 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
               </Button>
             </div>
           ) : (
-            <Button type="button" variant="secondary" className="w-auto" onClick={() => setIsConfirmingLeave(true)}>
+            <Button type="button" variant="secondary" onClick={() => setIsConfirmingLeave(true)}>
               Leave channel
             </Button>
           )
         ) : (
-          <Button type="button" isLoading={isJoining} loadingText="Joining…" className="w-auto" onClick={() => join()}>
+          <Button type="button" isLoading={isJoining} loadingText="Joining…" onClick={() => join()}>
             Join channel
           </Button>
         )}
@@ -452,7 +452,7 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
                   <Button
                     type="button"
                     variant="secondary"
-                    className="w-auto"
+                    size="sm"
                     disabled={!hasPreviousMembersPage}
                     onClick={previousMembersPage}
                   >
@@ -461,7 +461,7 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
                   <Button
                     type="button"
                     variant="secondary"
-                    className="w-auto"
+                    size="sm"
                     disabled={!hasNextMembersPage}
                     onClick={nextMembersPage}
                   >
@@ -503,13 +503,7 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
                     <option value="admin">admin</option>
                   </Select>
                 </label>
-                <Button
-                  type="submit"
-                  isLoading={isAdding}
-                  loadingText="Adding…"
-                  disabled={isFrozen}
-                  className="sm:w-auto"
-                >
+                <Button type="submit" isLoading={isAdding} loadingText="Adding…" disabled={isFrozen}>
                   Add member
                 </Button>
               </form>

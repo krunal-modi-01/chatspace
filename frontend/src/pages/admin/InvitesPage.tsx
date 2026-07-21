@@ -79,22 +79,26 @@ function InviteRow({
       <td className="px-4 py-3 text-right">
         {invite.status === 'pending' && (
           <div className="flex justify-end gap-2">
-            <button
+            <Button
               type="button"
+              variant="secondary"
+              size="sm"
+              isLoading={isBusy}
+              loadingText="Resending…"
               onClick={() => onResend(invite.id)}
-              disabled={isBusy}
-              className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-body font-medium text-[var(--color-text-primary)] transition-colors duration-150 ease-out hover:bg-[var(--color-surface-raised)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isBusy ? 'Resending…' : 'Resend'}
-            </button>
-            <button
+              Resend
+            </Button>
+            <Button
               type="button"
+              variant="danger"
+              size="sm"
+              isLoading={isBusy}
+              loadingText="Revoking…"
               onClick={() => onRevoke(invite.id)}
-              disabled={isBusy}
-              className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-body font-medium text-[var(--color-danger)] transition-colors duration-150 ease-out hover:bg-[var(--color-surface-raised)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isBusy ? 'Revoking…' : 'Revoke'}
-            </button>
+              Revoke
+            </Button>
           </div>
         )}
       </td>
@@ -157,7 +161,7 @@ export function InvitesPage(): JSX.Element {
               error={emailError ?? undefined}
             />
           </div>
-          <Button type="submit" isLoading={isIssuing} loadingText="Sending…" className="sm:w-auto">
+          <Button type="submit" isLoading={isIssuing} loadingText="Sending…">
             Send invite
           </Button>
         </form>
