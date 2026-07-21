@@ -1,5 +1,19 @@
 @import 'tailwindcss';
 
+/* Self-hosted variable fonts — architecture/design-tokens.md §4 (new in v3).
+ * The actual `@font-face` declarations (and their woff2 asset imports) live
+ * in `./fonts.css`, imported directly from `main.tsx` rather than via a
+ * nested `@import` here. Nesting the fontsource CSS inside this file (which
+ * is itself run through `@tailwindcss/postcss`) made the tool inline the
+ * `@font-face` rules but lose the base path needed to rewrite their
+ * `url(./files/*.woff2)` references — they'd 404 in the production build
+ * (confirmed locally: `vite build` logged "didn't resolve at build time" and
+ * the referenced files were absent from `dist/assets`). Importing the font
+ * CSS as its own JS-graph module sidesteps that: Vite resolves and copies
+ * the woff2 files and rewrites the urls correctly. See `fonts.css` for the
+ * full rationale (no external CDN, unicode-range subsetting, non-italic
+ * slice only). */
+
 /* Tailwind v4 class-based dark mode: `dark:` variants key off `.dark` on
  * `<html>` (toggled by `useTheme`/`ThemeToggle`), not only the OS media
  * query. See architecture/design-tokens.md §7. */
@@ -11,6 +25,94 @@
    * architecture/design-tokens.md §5. */
   --radius-md: 10px;
   --radius-lg: 16px;
+
+  /* Typography — font family tokens, architecture/design-tokens.md §4.
+   * Declared inside `@theme` (Tailwind's `--font-*` namespace) so Tailwind
+   * both (a) generates `font-sans`/`font-mono` utilities from these values
+   * and (b) points Preflight's `--default-font-family`/
+   * `--default-mono-font-family` at them — i.e. `body`/`html` pick up
+   * `--font-sans` automatically, no separate `font-family` rule needed. The
+   * self-hosted family name shipped by `@fontsource-variable` is
+   * `'Inter Variable'` / `'JetBrains Mono Variable'` (not the generic
+   * `'Inter var'` string the design doc uses as a placeholder) — listed
+   * first so the actually-loaded local font wins, with the doc's documented
+   * fallback chain preserved after it. */
+  --font-sans:
+    'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono:
+    'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Density scale — architecture/design-tokens.md §6 (new in v3). One rhythm
+ * for control/row heights and icon sizes so components stop hand-rolling
+ * their own. */
+:root {
+  --control-height-sm: 1.75rem; /* 28px — compact controls inside tables/rows */
+  --control-height-md: 2.25rem; /* 36px — default form controls */
+  /* Spec gives a 2.5rem–2.75rem (40–44px) range for table/list data rows;
+   * 2.75rem (upper bound) is picked as the single concrete value, matching
+   * the "comfortable, not maximal" density target (§1) — a notch more
+   * breathing room than a dense table, still short of a consumer chat app. */
+  --row-height-table: 2.75rem; /* 44px */
+  --row-height-nav: 2rem; /* 32px — single-line sidebar nav rows */
+  --icon-sm: 1rem; /* 16px */
+  --icon-md: 1.25rem; /* 20px */
+}
+
+/* Z-index scale — architecture/design-tokens.md §8 (new in v3). One ladder;
+ * components reference these names, never ad-hoc integers. */
+:root {
+  --z-base: 0;
+  --z-dropdown: 1000;
+  --z-sticky: 1100;
+  --z-drawer: 1200;
+  --z-modal: 1300;
+  --z-toast: 1400;
+  --z-tooltip: 1500;
+}
+
+/* Breakpoints — architecture/design-tokens.md §9 (new in v3). Documented for
+ * reference/custom media queries; Tailwind v4's own `sm:`/`md:`/`lg:`/`xl:`
+ * utilities already use these pixel values, this just names them for any
+ * hand-written CSS that needs to match (e.g. the sidebar/drawer switch at
+ * `md`, ADR-0014). */
+:root {
+  --bp-sm: 640px;
+  --bp-md: 768px;
+  --bp-lg: 1024px;
+  --bp-xl: 1280px;
+}
+
+/* Focus ring — architecture/design-tokens.md §12. One convention for every
+ * focusable element, always applied on `:focus-visible`. Filled/standalone
+ * controls (buttons, links) pair this with a `ring-offset`; inset controls
+ * (inputs, row actions) use `0` offset — see DESIGN_SYSTEM.md for per-
+ * component wiring. */
+:root {
+  --focus-ring-width: 2px;
+  --focus-ring-color: var(--color-accent);
+}
+
+/* Motion — architecture/design-tokens.md §11. */
+:root {
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+}
+
+/* Reduced motion (new in v3, hard requirement — WCAG 2.2 §2.3.3, see
+ * ACCESSIBILITY_GUIDELINES.md §3.7). Disables transforms (press/hover
+ * scale, slide-in) and shimmer/slide animations; instantaneous opacity/color
+ * changes are deliberately left alone so state feedback (focus, load,
+ * success, error) is never silently lost, only its motion is. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Semantic color tokens — architecture/design-tokens.md §2. Every surface
@@ -33,6 +135,15 @@
   --color-success: #059669;
   --color-warning: #d97706;
   --color-danger: #dc2626;
+
+  /* On-tint text blend target for `.tint-surface` (§12 recipe, below) — the
+   * raw semantic token mixed into a light surface at 12% does not leave
+   * enough contrast to use the raw token itself as text color (measured
+   * 2.8:1–4.0:1 against WCAG AA's 4.5:1 for normal text; code review
+   * finding, T53-T56). Blending the tint *toward* this color for text
+   * (rather than using the raw tint) restores AA in both themes — black in
+   * light mode darkens the tint, white in dark mode (below) lightens it. */
+  --tint-text-blend: #000000;
 }
 
 .dark {
@@ -50,21 +161,27 @@
   --color-success: #34d399;
   --color-warning: #fbbf24;
   --color-danger: #f87171;
+
+  --tint-text-blend: #ffffff;
 }
 
 /* Typography scale — architecture/design-tokens.md §4. Defined as custom
  * utilities (not raw Tailwind text-size classes) so size/weight/line-height
- * travel together as a single named token. */
+ * (and, for headings, tracking) travel together as a single named token.
+ * Headings (`text-display`, `text-heading`) get `-0.01em` letter-spacing per
+ * §4; body/caption keep default tracking. */
 @utility text-display {
   font-size: 2rem;
   font-weight: 600;
   line-height: 1.2;
+  letter-spacing: -0.01em;
 }
 
 @utility text-heading {
   font-size: 1.25rem;
   font-weight: 600;
   line-height: 1.3;
+  letter-spacing: -0.01em;
 }
 
 @utility text-subheading {
@@ -83,6 +200,44 @@
   font-size: 0.75rem;
   font-weight: 400;
   line-height: 1.4;
+}
+
+/* Tabular numerals — architecture/design-tokens.md §4. Apply to timestamps,
+ * counters, member counts, and any aligned numeric column so digits don't
+ * jitter width as they change. */
+@utility nums-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Badge / tinted-status recipe — architecture/design-tokens.md §12. Derives
+ * background + border from a single semantic color token via `color-mix`,
+ * so status chips/banners follow theme automatically instead of the six
+ * hand-rolled `amber-*`, `emerald-*`, `red-*`, `gray-*` implementations the
+ * v3 UX review found. Consumers set the `--tint` custom property to one of
+ * `--color-accent` / `--color-success` / `--color-warning` / `--color-danger`
+ * and apply `.tint-surface`; `AlertBanner` (T53–T56) and `Badge` (T58) both
+ * consume this. `neutral` has no color to mix, so it's a separate utility
+ * using `--color-surface-raised` + `--color-text-secondary` directly, per
+ * spec.
+ *
+ * Text color is deliberately NOT the raw `--tint` token: over a 12%-mix
+ * background, the raw semantic color fails WCAG AA (1.4.3, 4.5:1) in light
+ * theme (measured 2.8:1–4.0:1 — code review finding, T53-T56). Blending the
+ * tint 70% toward `--tint-text-blend` (black in light theme, white in dark
+ * theme — see :root/.dark above) yields an "on-tint" text color that passes
+ * AA in both themes (verified 5.2:1–6.9:1 light, 8.3:1–11.0:1 dark) while
+ * still reading as the same hue family as the tint. This is a token-level
+ * fix so `Badge` (T58) inherits AA-safe text automatically. */
+@utility tint-surface {
+  background-color: color-mix(in srgb, var(--tint) 12%, transparent);
+  border-color: color-mix(in srgb, var(--tint) 24%, transparent);
+  color: color-mix(in srgb, var(--tint) 70%, var(--tint-text-blend));
+}
+
+@utility tint-neutral {
+  background-color: var(--color-surface-raised);
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
 }
 
 body {

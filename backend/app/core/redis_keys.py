@@ -124,11 +124,19 @@ def typing_indicator_key(conversation_topic: str) -> str:
 
 
 class RateLimitScope(StrEnum):
-    """The three rate-limited operation classes (spec line 39, F62-F64)."""
+    """The rate-limited operation classes (spec line 39, F62-F64, F76/R59)."""
 
     MESSAGE_SEND = "message_send"
     AUTH = "auth"
     MEDIA_UPLOAD = "media_upload"
+    # General authenticated-read bucket (T73, `GET /v1/users/search`):
+    # not abuse-sensitive in the sense MESSAGE_SEND/AUTH are (no spend, no
+    # enumeration surface beyond the minimal fields the endpoint already
+    # returns to any authenticated user), but the frozen contract still
+    # calls out "rate-limited as a general authenticated read" so this
+    # class exists as the shared home for that policy rather than a
+    # one-off bucket private to a single route.
+    GENERAL_READ = "general_read"
 
 
 def rate_limit_bucket_key(scope: RateLimitScope, subject: str) -> str:

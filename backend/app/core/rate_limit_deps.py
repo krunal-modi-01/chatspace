@@ -1,6 +1,6 @@
-"""Route-facing wiring of `app.core.rate_limit` (T27).
+"""Route-facing wiring of `app.core.rate_limit` (T27, extended T73).
 
-Three consumers of the token-bucket engine:
+Consumers of the token-bucket engine:
 
 - `enforce_message_send_rate_limit` — a `Depends()` target for the two
   message-send routes (`app.api.messages`): `RateLimitScope.MESSAGE_SEND`,
@@ -9,6 +9,11 @@ Three consumers of the token-bucket engine:
   `RateLimitScope.MEDIA_UPLOAD`, keyed per authenticated user, fail-open
   on a Redis outage. Wired to `POST /v1/media` (T28, `app.api.media`) via
   `Depends(enforce_media_upload_rate_limit)` on that route.
+- `enforce_general_read_rate_limit` — a `Depends()` target for
+  `RateLimitScope.GENERAL_READ`, keyed per authenticated user, fail-open
+  on a Redis outage. Wired to `GET /v1/users/search` (T73,
+  `app.api.users`) — the frozen contract's "rate-limited as a general
+  authenticated read" clause.
 - `enforce_auth_rate_limit` — a plain async helper (not a bare
   `Depends()`) for `RateLimitScope.AUTH`. Every auth route it applies to
   (`app.api.auth`'s `login`/`register`/`refresh`, `app.api.password`'s
@@ -81,6 +86,26 @@ async def enforce_media_upload_rate_limit(current: _CurrentUser) -> None:
     decision = await enforce_rate_limit(
         get_redis_client(),
         scope=RateLimitScope.MEDIA_UPLOAD,
+        subject=str(current.user_id),
+        fail_closed=False,
+    )
+    if not decision.allowed:
+        raise RateLimitExceededError(decision.retry_after_seconds)
+
+
+async def enforce_general_read_rate_limit(current: _CurrentUser) -> None:
+    """`Depends()` target: per-user `RateLimitScope.GENERAL_READ` (60/min, burst 60).
+
+    Wired to `GET /v1/users/search` (T73). Fail-open, same reasoning as
+    `enforce_media_upload_rate_limit`: this scope is not abuse-sensitive
+    enough (no spend, no additional enumeration surface beyond the
+    already-minimal fields the endpoint returns) to justify blocking
+    ordinary reads during a Redis outage.
+    """
+
+    decision = await enforce_rate_limit(
+        get_redis_client(),
+        scope=RateLimitScope.GENERAL_READ,
         subject=str(current.user_id),
         fail_closed=False,
     )
