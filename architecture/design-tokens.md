@@ -44,8 +44,10 @@ Applied via a single `<AuroraBackground>` wrapper, not repeated per page:
 
 | Token | Value | Use |
 |---|---|---|
-| `--font-sans` | `'Inter var', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif` | All UI text (default on `body`) |
-| `--font-mono` | `'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace` | Correlation ids (dev), code, fixed-width data |
+| `--font-sans` | `'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif` | All UI text (default on `body`) |
+| `--font-mono` | `'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace` | Correlation ids (dev), code, fixed-width data |
+
+`'Inter Variable'` / `'JetBrains Mono Variable'` are the actual family names shipped by the self-hosted `@fontsource-variable` packages (not the generic `'Inter var'` placeholder used above pre-v3); listed first so the loaded local font wins, with the rest of the fallback chain unchanged.
 
 - **Tabular numerals:** apply `font-variant-numeric: tabular-nums` to timestamps, counters, member counts, and any aligned numeric column — expose as a `.nums-tabular` utility.
 - **Heading tracking:** headings (`text-display`, `text-heading`) use `letter-spacing: -0.01em`; body/caption use default tracking.
@@ -131,9 +133,11 @@ Derived treatments that components must use instead of importing raw Tailwind pa
 **Badge / tinted-status surfaces** — one recipe per semantic color, so status chips follow theme automatically:
 ```
 background: color-mix(in srgb, var(--color-<semantic>) 12%, transparent);
-color:      var(--color-<semantic>);
+color:      color-mix(in srgb, var(--color-<semantic>) 70%, <on-tint-blend>);
 ```
-where `<semantic>` ∈ { `accent`, `success`, `warning`, `danger` }, plus a `neutral` variant using `--color-surface-raised` background + `--color-text-secondary` text. This replaces the six hand-rolled `amber-*/emerald-*/red-*/gray-*` badge implementations the review found.
+where `<semantic>` ∈ { `accent`, `success`, `warning`, `danger` } and `<on-tint-blend>` is black in light theme / white in dark theme (exposed as `--tint-text-blend`, themed alongside the `--color-*` tokens in §2). The raw semantic color alone fails WCAG AA 1.4.3 (4.5:1) as text over a 12%-mix background in light theme (measured 2.8:1–4.0:1) — blend it 70% toward the on-tint-blend color instead of using it raw. Plus a `neutral` variant using `--color-surface-raised` background + `--color-text-secondary` text. This replaces the six hand-rolled `amber-*/emerald-*/red-*/gray-*` badge implementations the review found.
+
+`AlertBanner`'s implementation of this recipe (`.tint-surface` in `frontend/src/index.css`) also sets a `border-color: color-mix(in srgb, var(--color-<semantic>) 24%, transparent)` — a reasonable extension for a bordered banner surface. A plain `Badge`/pill (T58) typically has no visible border and can omit it; carry it forward only if the pill design calls for one.
 
 **Focus ring** — one convention for every focusable element:
 ```

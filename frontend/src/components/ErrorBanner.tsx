@@ -31,7 +31,7 @@ export function ErrorBanner({ error }: ErrorBannerProps): JSX.Element {
     <AlertBanner variant="error" role="alert" title={title}>
       <p>{detail}</p>
       {env.isDev && correlationId && (
-        <p className="mt-1 font-mono text-xs text-red-600">correlation_id: {correlationId}</p>
+        <p className="mt-1 font-mono text-xs">correlation_id: {correlationId}</p>
       )}
     </AlertBanner>
   );
