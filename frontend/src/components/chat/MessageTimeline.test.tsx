@@ -134,6 +134,49 @@ describe('MessageTimeline', () => {
     await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Edit message' })).not.toBeInTheDocument());
   });
 
+  it('disables Save while the edit draft is empty/whitespace-only (R36)', async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MessageTimeline
+        messages={[makeMessage({ id: '01J8AAAA', sender_id: OWN_ID, content: 'v1' })]}
+        currentUserId={OWN_ID}
+        onEdit={onEdit}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const textbox = screen.getByRole('textbox', { name: 'Edit message' });
+    await user.clear(textbox);
+    await user.type(textbox, '   ');
+
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it('flags an edit draft over the 4000-char limit, disables Save, and marks the field invalid (R36)', async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MessageTimeline
+        messages={[makeMessage({ id: '01J8AAAA', sender_id: OWN_ID, content: 'v1' })]}
+        currentUserId={OWN_ID}
+        onEdit={onEdit}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const textbox = screen.getByRole('textbox', { name: 'Edit message' });
+    await user.clear(textbox);
+    await user.click(textbox);
+    await user.paste('a'.repeat(4001));
+
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(textbox).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('4001/4000')).toBeInTheDocument();
+  });
+
   it('shows an inline error and stays in edit mode when the edit is rejected', async () => {
     const user = userEvent.setup();
     const onEdit = vi.fn().mockRejectedValue(new Error('already deleted'));

@@ -4,6 +4,7 @@ import { ErrorBanner } from '../../components/ErrorBanner';
 import { MessageList } from '../../components/chat/MessageList';
 import { PresenceIndicator } from '../../components/chat/PresenceIndicator';
 import { AlertBanner } from '../../components/ui/AlertBanner';
+import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { FormField } from '../../components/ui/FormField';
@@ -14,6 +15,7 @@ import { useChannelRemovalNotice } from '../../hooks/useChannelRemovalNotice';
 import { useConversationSocket } from '../../hooks/useConversationSocket';
 import { usePresenceAndTyping } from '../../hooks/usePresenceAndTyping';
 import { ApiError } from '../../api/problem';
+import { channelRoleBadgeVariant } from '../../utils/channelRoleBadgeVariant';
 import type { ChannelMember, ChannelRole, ConversationTarget } from '../../api/types';
 import type { PresenceState } from '../../ws/presenceStore';
 
@@ -24,21 +26,6 @@ function mutationErrorMessage(error: unknown): string | null {
     return 'This channel currently has no admins — membership changes are blocked.';
   }
   return null;
-}
-
-function RoleBadge({ role }: { role: ChannelRole }): JSX.Element {
-  const isAdmin = role === 'admin';
-  return (
-    <span
-      className={`inline-flex rounded-full px-2 py-0.5 text-caption font-semibold capitalize ${
-        isAdmin
-          ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
-          : 'bg-gray-100 text-gray-700 dark:bg-gray-800/60 dark:text-gray-300'
-      }`}
-    >
-      {role}
-    </span>
-  );
 }
 
 /** A pending self-targeted mutation awaiting a second, explicit confirm click
@@ -99,7 +86,9 @@ function MemberRow({
             </Select>
           </label>
         ) : (
-          <RoleBadge role={member.role} />
+          <Badge variant={channelRoleBadgeVariant(member.role)} className="capitalize">
+            {member.role}
+          </Badge>
         )}
       </td>
       <td className="px-4 py-3 text-caption text-[var(--color-text-tertiary)]">
@@ -322,13 +311,15 @@ function ChannelPageForId({ channelId }: { channelId: string }): JSX.Element {
         <div>
           <h1 className="text-heading text-[var(--color-text-primary)]">{channel.name}</h1>
           <div className="mt-1 flex items-center gap-2 text-caption text-[var(--color-text-tertiary)]">
-            <span className="rounded-full bg-gray-100 px-2 py-0.5 font-semibold dark:bg-gray-800/60">
-              {channel.is_private ? 'Private' : 'Public'}
-            </span>
+            <Badge variant="neutral">{channel.is_private ? 'Private' : 'Public'}</Badge>
             <span>
               {channel.member_count} {channel.member_count === 1 ? 'member' : 'members'}
             </span>
-            {channel.my_role !== null && <RoleBadge role={channel.my_role} />}
+            {channel.my_role !== null && (
+              <Badge variant={channelRoleBadgeVariant(channel.my_role)} className="capitalize">
+                {channel.my_role}
+              </Badge>
+            )}
           </div>
         </div>
 

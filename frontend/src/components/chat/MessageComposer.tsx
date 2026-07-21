@@ -6,9 +6,11 @@ import {
   type JSX,
   type KeyboardEvent,
 } from 'react';
+import { MESSAGE_MAX_LENGTH } from '../../constants';
 import { type PendingAttachment, useMediaUploads } from '../../hooks/useMediaUploads';
 import { formatBytes } from '../../utils/formatBytes';
 import { Button } from '../ui/Button';
+import { Textarea } from '../ui/Textarea';
 
 export interface MessageComposerProps {
   /** `mediaIds` (T35) is the `media_id`s of every successfully uploaded
@@ -25,7 +27,6 @@ export interface MessageComposerProps {
   onTyping?: () => void;
 }
 
-const MAX_LENGTH = 4000;
 /** Must stay comfortably under the server's 5s auto-expire window (F56) so
  * a continuously-typing user's indicator never lapses on the receiving
  * end between two of this client's frames. */
@@ -122,7 +123,7 @@ export function MessageComposer({ onSend, disabled = false, onTyping }: MessageC
     useMediaUploads();
 
   const trimmedLength = content.trim().length;
-  const isOverLimit = content.length > MAX_LENGTH;
+  const isOverLimit = content.length > MESSAGE_MAX_LENGTH;
   const canSubmit = !disabled && !isSubmitting && !isUploading && !hasError && trimmedLength > 0 && !isOverLimit;
 
   function notifyTyping(): void {
@@ -176,7 +177,7 @@ export function MessageComposer({ onSend, disabled = false, onTyping }: MessageC
       <label htmlFor="message-composer" className="sr-only">
         Message
       </label>
-      <textarea
+      <Textarea
         id="message-composer"
         value={content}
         onChange={(event) => {
@@ -192,7 +193,7 @@ export function MessageComposer({ onSend, disabled = false, onTyping }: MessageC
         placeholder="Write a message… (Enter to send, Shift+Enter for a new line)"
         aria-describedby="message-composer-hint"
         aria-invalid={isOverLimit ? true : undefined}
-        className="block w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-raised)] disabled:text-[var(--color-text-tertiary)]"
+        hasError={isOverLimit}
       />
 
       {attachments.length > 0 && (
@@ -223,7 +224,7 @@ export function MessageComposer({ onSend, disabled = false, onTyping }: MessageC
             id="message-composer-hint"
             className={`text-caption ${isOverLimit ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-tertiary)]'}`}
           >
-            {content.length}/{MAX_LENGTH}
+            {content.length}/{MESSAGE_MAX_LENGTH}
           </p>
         </div>
         <Button type="submit" isLoading={isSubmitting} loadingText="Sending…" disabled={!canSubmit} className="w-auto">
