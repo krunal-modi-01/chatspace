@@ -7,11 +7,11 @@ import {
 } from '../api/messagesApi';
 import { ApiError } from '../api/problem';
 import type { ConversationTarget, Message } from '../api/types';
+import { MESSAGE_MAX_LENGTH } from '../constants';
 import { generateClientId } from '../utils/id';
 import { applyDeleted, emptyMessageMap, sortedMessages, upsertMessages, type MessageMap } from '../ws/messageStore';
 
 const HISTORY_PAGE_LIMIT = 50;
-const MAX_CONTENT_LENGTH = 4000;
 
 export type PendingSendStatus = 'sending' | 'failed';
 
@@ -74,8 +74,8 @@ export function validateMessageContent(content: string): string | null {
   if (content.trim().length === 0) {
     return 'Message cannot be empty.';
   }
-  if (content.length > MAX_CONTENT_LENGTH) {
-    return `Message is too long (max ${MAX_CONTENT_LENGTH} characters).`;
+  if (content.length > MESSAGE_MAX_LENGTH) {
+    return `Message is too long (max ${MESSAGE_MAX_LENGTH} characters).`;
   }
   return null;
 }

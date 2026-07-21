@@ -1,35 +1,14 @@
 import type { JSX } from 'react';
 import { NavLink } from 'react-router-dom';
 import { ErrorBanner } from '../ErrorBanner';
+import { Badge } from '../ui/Badge';
 import { useMyChannels } from '../../hooks/useMyChannels';
-import type { ChannelRole, MyChannelSummary } from '../../api/types';
+import { channelRoleBadgeVariant } from '../../utils/channelRoleBadgeVariant';
+import type { MyChannelSummary } from '../../api/types';
 
 const ROW_BASE_CLASSES =
   'flex flex-col gap-1 rounded-md px-2 py-2 text-body transition-colors duration-150 ease-out ' +
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]';
-
-function VisibilityBadge({ isPrivate }: { isPrivate: boolean }): JSX.Element {
-  return (
-    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-caption font-semibold dark:bg-gray-800/60">
-      {isPrivate ? 'Private' : 'Public'}
-    </span>
-  );
-}
-
-function RoleBadge({ role }: { role: ChannelRole }): JSX.Element {
-  const isAdmin = role === 'admin';
-  return (
-    <span
-      className={`rounded-full px-2 py-0.5 text-caption font-semibold capitalize ${
-        isAdmin
-          ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
-          : 'bg-gray-100 text-gray-700 dark:bg-gray-800/60 dark:text-gray-300'
-      }`}
-    >
-      {role}
-    </span>
-  );
-}
 
 function ChannelRow({ channel }: { channel: MyChannelSummary }): JSX.Element {
   return (
@@ -46,8 +25,10 @@ function ChannelRow({ channel }: { channel: MyChannelSummary }): JSX.Element {
       >
         <span className="truncate font-medium">{channel.name}</span>
         <span className="flex items-center gap-1.5">
-          <VisibilityBadge isPrivate={channel.is_private} />
-          <RoleBadge role={channel.my_role} />
+          <Badge variant="neutral">{channel.is_private ? 'Private' : 'Public'}</Badge>
+          <Badge variant={channelRoleBadgeVariant(channel.my_role)} className="capitalize">
+            {channel.my_role}
+          </Badge>
         </span>
       </NavLink>
     </li>

@@ -1,7 +1,9 @@
 import { useState, type JSX } from 'react';
 import type { ChannelMemberSummary, Message } from '../../api/types';
+import { MESSAGE_MAX_LENGTH } from '../../constants';
 import { Avatar } from '../ui/Avatar';
 import { Button } from '../ui/Button';
+import { Textarea } from '../ui/Textarea';
 import { MediaAttachment } from './MediaAttachment';
 
 export interface MessageTimelineProps {
@@ -37,6 +39,69 @@ function displayName(member: ChannelMemberSummary | undefined, senderId: string)
   }
   const fullName = [member.first_name, member.last_name].filter(Boolean).join(' ').trim();
   return fullName || member.username;
+}
+
+/** The author's inline edit form for one message: shared `Textarea` (T59),
+ * the same non-empty/4000-char gate as the composer (R36), a limit hint
+ * that only appears near/over the cap, and Save/Cancel. Save stays disabled
+ * until the draft is valid — never a silent no-op submit. */
+function MessageEditForm({
+  messageId,
+  draft,
+  onDraftChange,
+  onSave,
+  onCancel,
+  isSaving,
+  error,
+}: {
+  messageId: string;
+  draft: string;
+  onDraftChange: (value: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  isSaving: boolean;
+  error: string | null;
+}): JSX.Element {
+  const isDraftEmpty = draft.trim().length === 0;
+  const isDraftOverLimit = draft.length > MESSAGE_MAX_LENGTH;
+  const showLimitHint = draft.length >= MESSAGE_MAX_LENGTH * 0.9;
+  const canSave = !isDraftEmpty && !isDraftOverLimit;
+  const hintId = `edit-${messageId}-hint`;
+
+  return (
+    <div className="flex w-full flex-col gap-2">
+      <label htmlFor={`edit-${messageId}`} className="sr-only">
+        Edit message
+      </label>
+      <Textarea
+        id={`edit-${messageId}`}
+        value={draft}
+        onChange={(event) => onDraftChange(event.target.value)}
+        rows={2}
+        aria-describedby={showLimitHint ? hintId : undefined}
+        aria-invalid={isDraftOverLimit ? true : undefined}
+        hasError={isDraftOverLimit}
+      />
+      {showLimitHint && (
+        <p id={hintId} className={`text-caption ${isDraftOverLimit ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-tertiary)]'}`}>
+          {draft.length}/{MESSAGE_MAX_LENGTH}
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="text-caption text-[var(--color-danger)]">
+          {error}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Button type="button" className="w-auto" isLoading={isSaving} loadingText="Saving…" disabled={!canSave} onClick={onSave}>
+          Save
+        </Button>
+        <Button type="button" variant="secondary" className="w-auto" onClick={onCancel} disabled={isSaving}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 /** Renders a REST-backed message list (T32): dedup'd, id-ordered messages
@@ -76,7 +141,7 @@ export function MessageTimeline({
   }
 
   async function saveEdit(messageId: string): Promise<void> {
-    if (!onEdit) {
+    if (!onEdit || draft.trim().length === 0 || draft.length > MESSAGE_MAX_LENGTH) {
       return;
     }
     setIsSavingEdit(true);
@@ -153,37 +218,15 @@ export function MessageTimeline({
               {isDeleted ? (
                 <p className="text-body italic text-[var(--color-text-tertiary)]">This message was deleted.</p>
               ) : isEditing ? (
-                <div className="flex w-full flex-col gap-2">
-                  <label htmlFor={`edit-${message.id}`} className="sr-only">
-                    Edit message
-                  </label>
-                  <textarea
-                    id={`edit-${message.id}`}
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    rows={2}
-                    className="block w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-body text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
-                  />
-                  {editError && (
-                    <p role="alert" className="text-caption text-[var(--color-danger)]">
-                      {editError}
-                    </p>
-                  )}
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      className="w-auto"
-                      isLoading={isSavingEdit}
-                      loadingText="Saving…"
-                      onClick={() => void saveEdit(message.id)}
-                    >
-                      Save
-                    </Button>
-                    <Button type="button" variant="secondary" className="w-auto" onClick={cancelEdit} disabled={isSavingEdit}>
-                      Cancel
-                    </Button>
-                  </div>
-                </div>
+                <MessageEditForm
+                  messageId={message.id}
+                  draft={draft}
+                  onDraftChange={setDraft}
+                  onSave={() => void saveEdit(message.id)}
+                  onCancel={cancelEdit}
+                  isSaving={isSavingEdit}
+                  error={editError}
+                />
               ) : (
                 <p className="text-body whitespace-pre-wrap text-[var(--color-text-primary)]">{message.content}</p>
               )}

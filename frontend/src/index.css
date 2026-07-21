@@ -115,6 +115,36 @@
   }
 }
 
+/* Skeleton shimmer — architecture/design-tokens.md §11/§14 (`Skeleton`,
+ * T60). A moving gradient sweep across the loading-placeholder shape. The
+ * sweep cadence isn't a cataloged token (design-tokens.md §11 only names
+ * `--motion-fast`/`--motion-base` for interaction transitions), so the
+ * duration is derived from `--motion-base` (8x) rather than inventing a new
+ * global token. The sitewide `prefers-reduced-motion: reduce` override above
+ * forces every `animation-duration` to 0.01ms, which neutralizes this
+ * shimmer to an imperceptible static tint per ACCESSIBILITY_GUIDELINES.md
+ * §3.7 ("disable transforms, slides, and skeleton shimmer") — no separate
+ * reduced-motion branch is needed in the component itself. */
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 150% 0;
+  }
+  100% {
+    background-position: -150% 0;
+  }
+}
+
+@utility skeleton-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-surface-raised) 25%,
+    var(--color-border) 50%,
+    var(--color-surface-raised) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer calc(var(--motion-base) * 8) ease-in-out infinite;
+}
+
 /* Semantic color tokens — architecture/design-tokens.md §2. Every surface
  * gets an explicit value per theme; components reference these via
  * `var(--color-*)` (arbitrary-value Tailwind utilities) so light/dark

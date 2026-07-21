@@ -1,6 +1,7 @@
 import { useRef, type JSX } from 'react';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { AlertBanner } from '../../components/ui/AlertBanner';
+import { Badge, type BadgeVariant } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { FormField } from '../../components/ui/FormField';
@@ -9,19 +10,26 @@ import { useInvites } from '../../hooks/useInvites';
 import { ApiError } from '../../api/problem';
 import type { InviteListItem, InviteStatus } from '../../api/types';
 
-const STATUS_BADGE_CLASSES: Record<InviteStatus, string> = {
-  pending: 'bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300',
-  accepted: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300',
-  revoked: 'bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300',
-  expired: 'bg-gray-100 text-gray-700 dark:bg-gray-800/60 dark:text-gray-300',
-};
-
-function StatusBadge({ status }: { status: InviteStatus }): JSX.Element {
-  return (
-    <span className={`inline-flex rounded-full px-2 py-0.5 text-caption font-semibold capitalize ${STATUS_BADGE_CLASSES[status]}`}>
-      {status}
-    </span>
-  );
+/** Invite status → `Badge` variant (docs/design/DESIGN_SYSTEM.md §3.2:
+ * `pending` → `warning`, `accepted` → `success`, `revoked` → `danger`,
+ * `expired` → `neutral`). The token-lifecycle language elsewhere in
+ * api-contract.md also surfaces a `used` outcome, and enum-typed fields are
+ * documented as open sets clients must tolerate (Conventions) — anything
+ * outside the four listed values falls back to `neutral` rather than
+ * throwing or rendering unstyled. */
+function inviteStatusBadgeVariant(status: InviteStatus): BadgeVariant {
+  switch (status) {
+    case 'pending':
+      return 'warning';
+    case 'accepted':
+      return 'success';
+    case 'revoked':
+      return 'danger';
+    case 'expired':
+      return 'neutral';
+    default:
+      return 'neutral';
+  }
 }
 
 /** Maps the two invite-issuance error cases the spec calls out by exact
@@ -58,7 +66,9 @@ function InviteRow({
     <tr className="border-b border-[var(--color-border)] last:border-0">
       <td className="px-4 py-3 text-body text-[var(--color-text-primary)]">{invite.email}</td>
       <td className="px-4 py-3">
-        <StatusBadge status={invite.status} />
+        <Badge variant={inviteStatusBadgeVariant(invite.status)} className="capitalize">
+          {invite.status}
+        </Badge>
       </td>
       <td className="px-4 py-3 text-caption text-[var(--color-text-tertiary)]">
         {new Date(invite.issued_at).toLocaleString()}

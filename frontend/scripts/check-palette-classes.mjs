@@ -17,10 +17,11 @@
  *  - `ui/AuroraBackground.tsx` — the ambient gradient/noise wrapper's
  *    `indigo-*` blob colors are the *documented* gradient recipe
  *    (design-tokens.md §3), not a stray palette class.
- *  - `nav/MyChannelsNav.tsx` — the pre-existing hand-rolled visibility/role
- *    pill badges, tracked for removal by T58 once the real `Badge` primitive
- *    (design-tokens.md §14) lands. Every other component must already be
- *    clean; new violations elsewhere fail the build.
+ *
+ * `nav/MyChannelsNav.tsx`'s hand-rolled visibility/role pill badges were
+ * removed by T58 in favor of the shared `Badge` primitive (design-tokens.md
+ * §14) — it is intentionally no longer allowlisted. Every component must be
+ * clean; new violations anywhere fail the build.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -37,7 +38,7 @@ const COMPONENTS_ROOT = join(__dirname, '..', 'src', 'components');
 const BANNED_PATTERN =
   /\b(gray|amber|emerald|red|indigo)-(50|100|200|300|400|500|600|700|800|900|950)\b/g;
 
-const ALLOWLIST = new Set([join('ui', 'AuroraBackground.tsx'), join('nav', 'MyChannelsNav.tsx')]);
+const ALLOWLIST = new Set([join('ui', 'AuroraBackground.tsx')]);
 
 /** @param {string} dir @returns {string[]} */
 function walk(dir) {

@@ -1,5 +1,6 @@
 import type { JSX } from 'react';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { Badge } from '../components/ui/Badge';
 import { Card } from '../components/ui/Card';
 import { useSessions } from '../hooks/useSessions';
 
@@ -33,9 +34,9 @@ export function SessionsPage(): JSX.Element {
                 <p className="text-body font-medium text-[var(--color-text-primary)]">
                   {session.device_label ?? FALLBACK_DEVICE_LABEL}
                   {session.current && (
-                    <span className="ml-2 rounded-full bg-[var(--color-accent)]/10 px-2 py-0.5 text-caption font-semibold text-[var(--color-accent)]">
+                    <Badge variant="accent" className="ml-2">
                       This device
-                    </span>
+                    </Badge>
                   )}
                 </p>
                 <p className="text-caption text-[var(--color-text-tertiary)]">

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { AlertBanner } from '../../components/ui/AlertBanner';
+import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
@@ -48,15 +49,7 @@ function UserRow({
         {user.role.replace('_', ' ')}
       </td>
       <td className="px-4 py-3">
-        <span
-          className={`inline-flex rounded-full px-2 py-0.5 text-caption font-semibold ${
-            user.is_active
-              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
-              : 'bg-gray-100 text-gray-700 dark:bg-gray-800/60 dark:text-gray-300'
-          }`}
-        >
-          {user.is_active ? 'Active' : 'Inactive'}
-        </span>
+        <Badge variant={user.is_active ? 'success' : 'neutral'}>{user.is_active ? 'Active' : 'Inactive'}</Badge>
       </td>
       <td className="px-4 py-3 text-caption text-[var(--color-text-tertiary)]">
         {user.last_seen ? new Date(user.last_seen).toLocaleString() : 'Never'}
