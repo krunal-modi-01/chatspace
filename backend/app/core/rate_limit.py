@@ -149,6 +149,17 @@ _POLICIES: dict[RateLimitScope, RateLimitPolicy] = {
     RateLimitScope.MEDIA_UPLOAD: RateLimitPolicy(
         capacity=20, refill_rate_per_second=20 / 60, ttl_seconds=120
     ),
+    # 60 / min (60s), burst (capacity) 60 — a general authenticated-read
+    # policy (T73, `GET /v1/users/search`). No specific number is pinned
+    # by the functional/technical spec for this class (unlike
+    # MESSAGE_SEND/AUTH/MEDIA_UPLOAD, which the contract enumerates
+    # exactly); this is a conservative ceiling generous enough for normal
+    # member-/DM-picker typeahead use (a few requests per keystroke) while
+    # still bounding a single caller's repeated-seq-scan cost against the
+    # ~1,000-row `users` table (constitution #7).
+    RateLimitScope.GENERAL_READ: RateLimitPolicy(
+        capacity=60, refill_rate_per_second=60 / 60, ttl_seconds=120
+    ),
 }
 
 

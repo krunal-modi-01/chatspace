@@ -21,7 +21,10 @@ reactivate, `app.api.admin`). T21 adds `/v1/channels/{id}/messages` +
 `/v1/messages/{id}` (channel message send/edit/delete/history,
 `app.api.messages`, persist-only — fan-out is T24). T28 adds
 `/v1/media` + `/v1/media/{id}/url` (upload/validate/sniff/EXIF-strip/
-store + presigned GET, `app.api.media`).
+store + presigned GET, `app.api.media`). T73 adds `/v1/users/search`
+(scoped, any-active-user workspace directory search, minimal public
+fields only, `app.api.users` — distinct from the System-Admin-only
+`/v1/admin/users`).
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from app.api import (
     metrics,
     password,
     sessions,
+    users,
 )
 
 api_router = APIRouter(prefix="/v1")
@@ -53,4 +57,5 @@ api_router.include_router(channels.router)
 api_router.include_router(messages.router)  # T21 channels/messages + T22 dms/messages
 api_router.include_router(media.router)  # T28 media upload + presigned fetch
 api_router.include_router(admin.router)
+api_router.include_router(users.router)  # T73 GET /users/search — scoped directory read
 api_router.include_router(metrics.router)  # T39 operator-only observability snapshot
