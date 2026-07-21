@@ -61,13 +61,9 @@ function AttachmentRow({
       <div className="flex items-center justify-between gap-2">
         <span className="min-w-0 flex-1 truncate text-body text-[var(--color-text-primary)]">{attachment.file.name}</span>
         <span className="shrink-0 text-caption text-[var(--color-text-tertiary)]">{formatBytes(attachment.file.size)}</span>
-        <button
-          type="button"
-          onClick={() => onRemove(attachment.id)}
-          className="shrink-0 text-caption font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
-        >
+        <Button type="button" variant="ghost" size="sm" className="shrink-0" onClick={() => onRemove(attachment.id)}>
           Remove
-        </button>
+        </Button>
       </div>
 
       {attachment.status === 'uploading' && (
@@ -95,13 +91,15 @@ function AttachmentRow({
           {isError && attachment.retryAfterSeconds !== undefined && ` Try again in ${attachment.retryAfterSeconds}s.`}
         </span>
         {isError && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
+            className="shrink-0 text-[var(--color-accent)]! hover:text-[var(--color-accent-hover)]!"
             onClick={() => onRetry(attachment.id)}
-            className="shrink-0 text-caption font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
           >
             Retry
-          </button>
+          </Button>
         )}
       </div>
     </li>
@@ -227,7 +225,7 @@ export function MessageComposer({ onSend, disabled = false, onTyping }: MessageC
             {content.length}/{MESSAGE_MAX_LENGTH}
           </p>
         </div>
-        <Button type="submit" isLoading={isSubmitting} loadingText="Sending…" disabled={!canSubmit} className="w-auto">
+        <Button type="submit" isLoading={isSubmitting} loadingText="Sending…" disabled={!canSubmit}>
           Send
         </Button>
       </div>

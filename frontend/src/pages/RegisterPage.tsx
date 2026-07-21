@@ -136,7 +136,7 @@ export function RegisterPage(): JSX.Element {
                 onChange={(event) => setField('avatarUrl', event.target.value)}
               />
 
-              <Button type="submit" isLoading={isSubmitting} loadingText="Creating account…">
+              <Button type="submit" fullWidth isLoading={isSubmitting} loadingText="Creating account…">
                 Create account
               </Button>
             </form>

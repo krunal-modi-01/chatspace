@@ -93,10 +93,10 @@ function MessageEditForm({
         </p>
       )}
       <div className="flex gap-2">
-        <Button type="button" className="w-auto" isLoading={isSaving} loadingText="Saving…" disabled={!canSave} onClick={onSave}>
+        <Button type="button" size="sm" isLoading={isSaving} loadingText="Saving…" disabled={!canSave} onClick={onSave}>
           Save
         </Button>
-        <Button type="button" variant="secondary" className="w-auto" onClick={onCancel} disabled={isSaving}>
+        <Button type="button" variant="secondary" size="sm" onClick={onCancel} disabled={isSaving}>
           Cancel
         </Button>
       </div>
@@ -244,42 +244,43 @@ export function MessageTimeline({
               {!isDeleted && !isEditing && isOwn && (onEdit || onDelete) && (
                 <div className="flex items-center gap-2 pt-1">
                   {onEdit && (
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-[var(--color-accent)]! hover:text-[var(--color-accent-hover)]!"
                       onClick={() => startEdit(message)}
-                      className="text-caption font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
                     >
                       Edit
-                    </button>
+                    </Button>
                   )}
                   {onDelete &&
                     (isConfirmingDelete ? (
                       <span className="flex items-center gap-2">
-                        <button
+                        <Button
                           type="button"
+                          variant="danger"
+                          size="sm"
+                          isLoading={isDeleting}
+                          loadingText="Deleting…"
                           onClick={() => void confirmDelete(message.id)}
-                          disabled={isDeleting}
-                          className="text-caption font-medium text-[var(--color-danger)] hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          {isDeleting ? 'Deleting…' : 'Confirm delete'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={cancelDelete}
-                          disabled={isDeleting}
-                          className="text-caption font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                        >
+                          Confirm delete
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" disabled={isDeleting} onClick={cancelDelete}>
                           Cancel
-                        </button>
+                        </Button>
                       </span>
                     ) : (
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="text-[var(--color-danger)]! hover:opacity-80"
                         onClick={() => setConfirmDeleteId(message.id)}
-                        className="text-caption font-medium text-[var(--color-danger)] hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
                       >
                         Delete
-                      </button>
+                      </Button>
                     ))}
                 </div>
               )}

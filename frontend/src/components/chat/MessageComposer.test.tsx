@@ -191,7 +191,9 @@ describe('MessageComposer', () => {
     await user.upload(input, file);
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/exceeds the maximum size/i));
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    const retryButton = screen.getByRole('button', { name: 'Retry' });
+    expect(retryButton).toBeInTheDocument();
+    expect(retryButton).toHaveClass('text-[var(--color-accent)]!');
 
     await user.type(screen.getByRole('textbox'), 'hi');
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();

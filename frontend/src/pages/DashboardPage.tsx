@@ -1,6 +1,7 @@
 import type { JSX } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 
 /** Protected landing page. DMs UI lands in a later task; channels/membership
@@ -18,12 +19,9 @@ export function DashboardPage(): JSX.Element {
         <p className="text-body text-[var(--color-text-secondary)]">
           Create a channel or browse public channels to join. Your DMs will appear here once they’re available.
         </p>
-        <Link
-          to="/channels"
-          className="inline-flex items-center justify-center rounded-md bg-[var(--color-accent)] px-3 py-2 text-sm font-semibold text-white transition-colors duration-150 ease-out hover:bg-[var(--color-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
-        >
+        <Button as={Link} to="/channels">
           Browse channels
-        </Link>
+        </Button>
       </Card>
     </div>
   );

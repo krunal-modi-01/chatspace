@@ -38,7 +38,7 @@ function ChannelRow({
         <Button
           type="button"
           variant="secondary"
-          className="w-auto"
+          size="sm"
           isLoading={isBusy}
           loadingText="Joining…"
           onClick={() => onJoin(channel.id)}
@@ -127,7 +127,7 @@ export function ChannelsPage(): JSX.Element {
             />
             Private
           </label>
-          <Button type="submit" isLoading={isCreating} loadingText="Creating…" className="sm:w-auto">
+          <Button type="submit" isLoading={isCreating} loadingText="Creating…">
             Create channel
           </Button>
         </form>
@@ -198,13 +198,13 @@ export function ChannelsPage(): JSX.Element {
               <Button
                 type="button"
                 variant="secondary"
-                className="w-auto"
+                size="sm"
                 disabled={!hasPreviousPage}
                 onClick={previousPage}
               >
                 Previous
               </Button>
-              <Button type="button" variant="secondary" className="w-auto" disabled={!hasNextPage} onClick={nextPage}>
+              <Button type="button" variant="secondary" size="sm" disabled={!hasNextPage} onClick={nextPage}>
                 Next
               </Button>
             </div>

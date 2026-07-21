@@ -59,44 +59,44 @@ function UserRow({
           isConfirming ? (
             <div className="flex justify-end items-center gap-2">
               <span className="text-caption text-[var(--color-text-secondary)]">Deactivate this user?</span>
-              <button
+              <Button
                 ref={(el) => registerActionRef(user.id, el)}
                 type="button"
+                variant="danger"
+                size="sm"
+                isLoading={isBusy}
+                loadingText="Deactivating…"
                 onClick={() => onConfirmDeactivate(user.id)}
-                disabled={isBusy}
-                className="rounded-md bg-[var(--color-danger)] px-3 py-1.5 text-body font-medium text-white transition-opacity duration-150 ease-out hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isBusy ? 'Deactivating…' : 'Confirm'}
-              </button>
-              <button
-                type="button"
-                onClick={() => onCancelDeactivate(user.id)}
-                disabled={isBusy}
-                className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-body font-medium text-[var(--color-text-primary)] transition-colors duration-150 ease-out hover:bg-[var(--color-surface-raised)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50"
-              >
+                Confirm
+              </Button>
+              <Button type="button" variant="secondary" size="sm" disabled={isBusy} onClick={() => onCancelDeactivate(user.id)}>
                 Cancel
-              </button>
+              </Button>
             </div>
           ) : (
-            <button
+            <Button
               ref={(el) => registerActionRef(user.id, el)}
               type="button"
+              variant="danger"
+              size="sm"
               onClick={() => onRequestDeactivate(user.id)}
-              className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-body font-medium text-[var(--color-danger)] transition-colors duration-150 ease-out hover:bg-[var(--color-surface-raised)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
             >
               Deactivate
-            </button>
+            </Button>
           )
         ) : (
-          <button
+          <Button
             ref={(el) => registerActionRef(user.id, el)}
             type="button"
+            variant="secondary"
+            size="sm"
+            isLoading={isBusy}
+            loadingText="Reactivating…"
             onClick={() => onReactivate(user.id)}
-            disabled={isBusy}
-            className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-body font-medium text-[var(--color-text-primary)] transition-colors duration-150 ease-out hover:bg-[var(--color-surface-raised)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {isBusy ? 'Reactivating…' : 'Reactivate'}
-          </button>
+            Reactivate
+          </Button>
         )}
       </td>
     </tr>
@@ -178,7 +178,7 @@ export function UsersPage(): JSX.Element {
               className="mt-0"
             />
           </div>
-          <Button type="submit" variant="secondary" className="w-auto">
+          <Button type="submit" variant="secondary">
             Search
           </Button>
         </form>

@@ -73,7 +73,7 @@ export function LoginPage(): JSX.Element {
                 </Link>
               </div>
 
-              <Button type="submit" isLoading={isSubmitting} loadingText="Signing in…">
+              <Button type="submit" fullWidth isLoading={isSubmitting} loadingText="Signing in…">
                 Sign in
               </Button>
             </form>
