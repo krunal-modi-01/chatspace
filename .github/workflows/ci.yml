@@ -197,8 +197,12 @@ jobs:
         working-directory: frontend
         run: npm install --no-audit --no-fund
 
-      # CLAUDE.md commands.lint (frontend half)
-      - name: Lint (oxlint via npm run lint)
+      # CLAUDE.md commands.lint (frontend half). `npm run lint` runs oxlint
+      # plus the T53–T56 palette-class guard (scripts/check-palette-classes.mjs),
+      # which fails the build if a raw gray-*, amber-*, emerald-*, red-*, or
+      # indigo-* Tailwind class is introduced under src/components/** — see
+      # architecture/design-tokens.md §2/§12/§15.
+      - name: Lint (oxlint + palette-class guard via npm run lint)
         working-directory: frontend
         run: npm run lint
 

@@ -11,7 +11,7 @@ export function PublicOnlyRoute(): JSX.Element {
   if (isBootstrapping) {
     return (
       <div role="status" aria-live="polite" className="flex min-h-screen items-center justify-center">
-        <span className="text-sm text-gray-500">Loading…</span>
+        <span className="text-sm text-[var(--color-text-secondary)]">Loading…</span>
       </div>
     );
   }

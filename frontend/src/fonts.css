@@ -1,0 +1,15 @@
+/* Self-hosted variable fonts — architecture/design-tokens.md §4 (new in v3).
+ * Imported directly from `main.tsx` (a JS module, not nested inside
+ * `index.css`) so Vite's own CSS module graph resolves and copies the woff2
+ * assets and rewrites their `url()`s into `dist/assets` — see the note in
+ * `index.css` for why the nested-`@import` form silently broke this.
+ *
+ * `@fontsource-variable/*` bundles the actual woff2 files; there is no
+ * third-party CDN request (e.g. Google Fonts) at runtime. Each `@font-face`
+ * is scoped by `unicode-range`, so the browser only fetches the subset(s) it
+ * needs to render this app's copy (Latin), not the whole family. `wght.css`
+ * (not the package's default `index.css`) is imported deliberately: it's the
+ * non-italic, variable-weight-only slice — this app never sets
+ * `font-style: italic`, so the italic axis would be dead weight. */
+@import '@fontsource-variable/inter/wght.css';
+@import '@fontsource-variable/jetbrains-mono/wght.css';

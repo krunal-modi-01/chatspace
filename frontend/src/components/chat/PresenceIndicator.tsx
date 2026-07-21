@@ -25,7 +25,7 @@ export function PresenceIndicator({ presence }: PresenceIndicatorProps): JSX.Ele
       <span
         aria-hidden="true"
         className={`h-2 w-2 shrink-0 rounded-full ${
-          isOnline ? 'bg-[var(--color-success)]' : 'bg-gray-400 dark:bg-gray-600'
+          isOnline ? 'bg-[var(--color-success)]' : 'bg-[var(--color-text-tertiary)]'
         }`}
       />
       <span>{label}</span>
